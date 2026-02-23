@@ -346,6 +346,247 @@ export default function Home() {
           </div>
         </section>
 
+        <section className="py-20 px-6 bg-slate-50">
+          <div className="max-w-7xl mx-auto">
+            <div className="text-center mb-12">
+              <h2 className="text-4xl font-bold text-slate-900 mb-4">
+                סוגי השאלות האינטראקטיביות
+              </h2>
+              <p className="text-lg text-slate-600 max-w-3xl mx-auto mb-2">
+                מגוון רחב של שאלות נפוצות אוטומטית ממצגות שלכם.
+              </p>
+              <p className="text-base text-slate-600 max-w-3xl mx-auto">
+                כל מה שעליכם לעשות כדי שהמערה תעבוד, הוא לרשום אותן בתבנית התכנות.
+              </p>
+            </div>
+
+            <div className="max-w-5xl mx-auto">
+              <div className="grid lg:grid-cols-2 gap-8 mb-8">
+                <Card className="bg-white border border-slate-200 hover:shadow-lg transition-shadow">
+                  <CardHeader className="pb-3">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="w-12 h-12 bg-cyan-50 rounded-lg flex items-center justify-center">
+                        <MessageSquare className="h-6 w-6 text-cyan-500" />
+                      </div>
+                      <div className="text-right">
+                        <CardTitle className="text-xl font-bold">בחירה יחידה</CardTitle>
+                        <p className="text-sm text-slate-500 mt-1">שאלה עם תשובה נכונה אחת מתוך מספר אפשרויות</p>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="bg-slate-50 rounded-lg p-5 border border-slate-200">
+                      <p className="text-sm font-medium text-slate-700 mb-4">מהו האבחון הארכיאי על ייצור אנרגיה בתא?</p>
+                      <div className="space-y-2.5">
+                        <div className="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-lg">
+                          <div className="w-5 h-5 rounded-full border-2 border-slate-300"></div>
+                          <span className="text-sm text-slate-600">ריבונום</span>
+                        </div>
+                        <div className="flex items-center gap-3 p-3 bg-teal-50 border-2 border-teal-500 rounded-lg">
+                          <div className="w-5 h-5 rounded-full border-2 border-teal-500 bg-teal-500 flex items-center justify-center">
+                            <div className="w-2 h-2 bg-white rounded-full"></div>
+                          </div>
+                          <span className="text-sm text-slate-700 font-medium">מיטוכונדריה</span>
+                        </div>
+                        <div className="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-lg">
+                          <div className="w-5 h-5 rounded-full border-2 border-slate-300"></div>
+                          <span className="text-sm text-slate-600">גולג׳י</span>
+                        </div>
+                        <div className="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-lg">
+                          <div className="w-5 h-5 rounded-full border-2 border-slate-300"></div>
+                          <span className="text-sm text-slate-600">ליזוזום</span>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-white border border-slate-200 hover:shadow-lg transition-shadow">
+                  <CardHeader className="pb-3">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="w-12 h-12 bg-emerald-50 rounded-lg flex items-center justify-center">
+                        <Layers className="h-6 w-6 text-emerald-500" />
+                      </div>
+                      <div className="text-right">
+                        <CardTitle className="text-xl font-bold">בחירה מרובה</CardTitle>
+                        <p className="text-sm text-slate-500 mt-1">שאלה עם מספר תשובות נכונות מתוך אפשרויות</p>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="bg-slate-50 rounded-lg p-5 border border-slate-200">
+                      <p className="text-sm font-medium text-slate-700 mb-4">אילו מן הערכים הבאים כוללים ריכוזים מוגזמים?</p>
+                      <div className="space-y-2.5">
+                        <div className="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-lg">
+                          <div className="w-5 h-5 rounded border-2 border-slate-300"></div>
+                          <span className="text-sm text-slate-600">כריכה טבעית למקומות מהימנים</span>
+                        </div>
+                        <div className="flex items-center gap-3 p-3 bg-emerald-50 border-2 border-emerald-500 rounded-lg">
+                          <div className="w-5 h-5 rounded border-2 border-emerald-500 bg-emerald-500 flex items-center justify-center">
+                            <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                            </svg>
+                          </div>
+                          <span className="text-sm text-slate-700 font-medium">ניווח אוטומטי לסעיף מהירים ונכונים</span>
+                        </div>
+                        <div className="flex items-center gap-3 p-3 bg-emerald-50 border-2 border-emerald-500 rounded-lg">
+                          <div className="w-5 h-5 rounded border-2 border-emerald-500 bg-emerald-500 flex items-center justify-center">
+                            <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                            </svg>
+                          </div>
+                          <span className="text-sm text-slate-700 font-medium">צ׳ארט מתוך מספר אפשרויות מיוחסת מכוונים</span>
+                        </div>
+                        <div className="flex items-center gap-3 p-3 bg-white border border-slate-200 rounded-lg">
+                          <div className="w-5 h-5 rounded border-2 border-slate-300"></div>
+                          <span className="text-sm text-slate-600">סידור פריטים בסדר מוכן</span>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              <div className="grid lg:grid-cols-2 gap-8">
+                <Card className="bg-white border border-slate-200 hover:shadow-lg transition-shadow">
+                  <CardHeader className="pb-3">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="w-12 h-12 bg-blue-50 rounded-lg flex items-center justify-center">
+                        <RotateCcw className="h-6 w-6 text-blue-500" />
+                      </div>
+                      <div className="text-right">
+                        <CardTitle className="text-xl font-bold">גרור ושחרר - ערך יחיד</CardTitle>
+                        <p className="text-sm text-slate-500 mt-1">גררית פריט אחד לתיבית הנכונה</p>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="bg-slate-50 rounded-lg p-5 border border-slate-200">
+                      <p className="text-sm font-medium text-slate-700 mb-4">גררית את ההגדרה לתיבה המתאימה:</p>
+                      <div className="space-y-3">
+                        <div className="p-3 bg-purple-100 border-2 border-purple-400 border-dashed rounded-lg text-center">
+                          <span className="text-sm font-medium text-purple-700">תפקיד פריט מאופס</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="p-3 bg-white border-2 border-slate-200 rounded-lg text-center min-h-[60px] flex items-center justify-center">
+                            <span className="text-xs text-slate-500">ריבוזום</span>
+                          </div>
+                          <div className="p-3 bg-white border-2 border-slate-200 rounded-lg text-center min-h-[60px] flex items-center justify-center">
+                            <span className="text-xs text-slate-500">גולג׳י</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-white border border-slate-200 hover:shadow-lg transition-shadow">
+                  <CardHeader className="pb-3">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="w-12 h-12 bg-violet-50 rounded-lg flex items-center justify-center">
+                        <Layers className="h-6 w-6 text-violet-500" />
+                      </div>
+                      <div className="text-right">
+                        <CardTitle className="text-xl font-bold">גרור ושחרר - ערכים מרובים</CardTitle>
+                        <p className="text-sm text-slate-500 mt-1">ניווח מספר פריטים למקומים מיוחסים מכוונים</p>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="bg-slate-50 rounded-lg p-5 border border-slate-200">
+                      <p className="text-sm font-medium text-slate-700 mb-4">מיינו את הפריטים:</p>
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          <p className="text-xs font-medium text-slate-600">תאי בעלי חיים:</p>
+                          <div className="p-3 bg-blue-50 border-2 border-blue-300 border-dashed rounded-lg min-h-[50px]"></div>
+                        </div>
+                        <div className="space-y-2">
+                          <p className="text-xs font-medium text-slate-600">תאי צמחים:</p>
+                          <div className="p-3 bg-green-50 border-2 border-green-300 border-dashed rounded-lg min-h-[50px]"></div>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-white border border-slate-200 hover:shadow-lg transition-shadow">
+                  <CardHeader className="pb-3">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="w-12 h-12 bg-amber-50 rounded-lg flex items-center justify-center">
+                        <Layers className="h-6 w-6 text-amber-500" />
+                      </div>
+                      <div className="text-right">
+                        <CardTitle className="text-xl font-bold">מיון וסידור</CardTitle>
+                        <p className="text-sm text-slate-500 mt-1">סידור פריטים בסדר מוכן</p>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="bg-slate-50 rounded-lg p-5 border border-slate-200">
+                      <p className="text-sm font-medium text-slate-700 mb-4">סדרו את התהליך:</p>
+                      <div className="space-y-2.5">
+                        <div className="flex items-center gap-3 p-3 bg-white border border-slate-300 rounded-lg cursor-move">
+                          <div className="flex flex-col gap-0.5">
+                            <div className="w-1 h-1 bg-slate-400 rounded-full"></div>
+                            <div className="w-1 h-1 bg-slate-400 rounded-full"></div>
+                            <div className="w-1 h-1 bg-slate-400 rounded-full"></div>
+                          </div>
+                          <span className="text-sm text-slate-600">1. קליטת אור</span>
+                        </div>
+                        <div className="flex items-center gap-3 p-3 bg-white border border-slate-300 rounded-lg cursor-move">
+                          <div className="flex flex-col gap-0.5">
+                            <div className="w-1 h-1 bg-slate-400 rounded-full"></div>
+                            <div className="w-1 h-1 bg-slate-400 rounded-full"></div>
+                            <div className="w-1 h-1 bg-slate-400 rounded-full"></div>
+                          </div>
+                          <span className="text-sm text-slate-600">2. המרת אנרגיה</span>
+                        </div>
+                        <div className="flex items-center gap-3 p-3 bg-white border border-slate-300 rounded-lg cursor-move">
+                          <div className="flex flex-col gap-0.5">
+                            <div className="w-1 h-1 bg-slate-400 rounded-full"></div>
+                            <div className="w-1 h-1 bg-slate-400 rounded-full"></div>
+                            <div className="w-1 h-1 bg-slate-400 rounded-full"></div>
+                          </div>
+                          <span className="text-sm text-slate-600">3. ייצור גלוקוז</span>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-white border border-slate-200 hover:shadow-lg transition-shadow">
+                  <CardHeader className="pb-3">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="w-12 h-12 bg-rose-50 rounded-lg flex items-center justify-center">
+                        <Sparkles className="h-6 w-6 text-rose-500" />
+                      </div>
+                      <div className="text-right">
+                        <CardTitle className="text-xl font-bold">שאלה פתוחה</CardTitle>
+                        <p className="text-sm text-slate-500 mt-1">תשובה חופשית עם בדיקת AI אוטומטית</p>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="bg-slate-50 rounded-lg p-5 border border-slate-200">
+                      <p className="text-sm font-medium text-slate-700 mb-4">הסבירו בקצרה מה התפקיד של...</p>
+                      <div className="bg-white border border-slate-300 rounded-lg p-3 min-h-[100px]">
+                        <p className="text-xs text-slate-400 italic">תשובת התלמיד תיבדק אוטומטית...</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              <div className="mt-10 text-center">
+                <Button className="bg-cyan-400 hover:bg-cyan-500 text-white px-8 h-12 rounded-md text-base">
+                  לחבירת השאלות
+                  <ArrowLeft className="mr-2 h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section className="py-16 px-6 bg-gray-50">
           <div className="max-w-4xl mx-auto">
             <Card className="border border-cyan-200 bg-gradient-to-br from-cyan-50/50 to-blue-50/50 shadow-sm">
