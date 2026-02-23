@@ -47,8 +47,10 @@ export default function Home() {
               <Link href="#" className="text-slate-600 hover:text-slate-900">התחברות</Link>
             </nav>
 
-            <Button className="bg-cyan-400 hover:bg-cyan-500 text-white rounded-md px-6">
-              הרשמה
+            <Button asChild className="bg-cyan-400 hover:bg-cyan-500 text-white rounded-md px-6">
+              <Link href="/teacher-register">
+                הרשמה
+              </Link>
             </Button>
           </div>
         </div>
@@ -602,12 +604,12 @@ export default function Home() {
                   העלו מצגת, הגדירו שאלות, ותנו לתלמידים ללמוד בקצב שלהם - הכל בלי עלות
                 </p>
                 <div className="flex justify-center gap-3">
-                  <Link href="/teacher-register">
-                    <Button size="lg" className="bg-cyan-400 hover:bg-cyan-500 text-white h-11 px-6 rounded-md">
+                  <Button size="lg" asChild className="bg-cyan-400 hover:bg-cyan-500 text-white h-11 px-6 rounded-md">
+                    <Link href="/teacher-register">
                       הרשמה כמורה
                       <ArrowLeft className="ml-2 h-4 w-4" />
-                    </Button>
-                  </Link>
+                    </Link>
+                  </Button>
                   <Button size="lg" variant="outline" className="h-11 px-6 rounded-md border-slate-300">
                     יצירת קורס ראשון
                   </Button>
