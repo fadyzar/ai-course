@@ -602,10 +602,12 @@ export default function Home() {
                   העלו מצגת, הגדירו שאלות, ותנו לתלמידים ללמוד בקצב שלהם - הכל בלי עלות
                 </p>
                 <div className="flex justify-center gap-3">
-                  <Button size="lg" className="bg-cyan-400 hover:bg-cyan-500 text-white h-11 px-6 rounded-md">
-                    הרשמה כמורה
-                    <ArrowLeft className="ml-2 h-4 w-4" />
-                  </Button>
+                  <Link href="/teacher-register">
+                    <Button size="lg" className="bg-cyan-400 hover:bg-cyan-500 text-white h-11 px-6 rounded-md">
+                      הרשמה כמורה
+                      <ArrowLeft className="ml-2 h-4 w-4" />
+                    </Button>
+                  </Link>
                   <Button size="lg" variant="outline" className="h-11 px-6 rounded-md border-slate-300">
                     יצירת קורס ראשון
                   </Button>
