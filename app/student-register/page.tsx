@@ -1,13 +1,18 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Download, UserCircle, BookOpen, Trophy, Bell } from 'lucide-react';
+import { Download, UserCircle, BookOpen, Trophy, Bell, Loader2 } from 'lucide-react';
 import { useState } from 'react';
+import { signUpUser } from '@/lib/auth-helpers';
+import { toast } from 'sonner';
 
 export default function StudentRegisterPage() {
+  const router = useRouter();
+  const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
     fullName: '',
     email: '',
@@ -15,8 +20,42 @@ export default function StudentRegisterPage() {
     courseCode: ''
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (formData.password.length < 6) {
+      toast.error('הסיסמה חייבת להכיל לפחות 6 תווים');
+      return;
+    }
+
+    if (!formData.fullName.trim()) {
+      toast.error('נא להזין שם מלא');
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      const result = await signUpUser({
+        email: formData.email,
+        password: formData.password,
+        fullName: formData.fullName,
+        role: 'student',
+        courseCode: formData.courseCode || undefined,
+      });
+
+      if (result.success) {
+        toast.success('הרישום הושלם בהצלחה!');
+        router.push('/dashboard');
+      } else {
+        toast.error(result.error || 'שגיאה ברישום');
+      }
+    } catch (error: any) {
+      toast.error('שגיאה בלתי צפויה');
+      console.error('Registration error:', error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -113,9 +152,17 @@ export default function StudentRegisterPage() {
 
               <Button
                 type="submit"
-                className="w-full bg-cyan-400 hover:bg-cyan-500 text-white h-12 text-base font-medium"
+                disabled={isLoading}
+                className="w-full bg-cyan-400 hover:bg-cyan-500 text-white h-12 text-base font-medium disabled:opacity-50"
               >
-                כניסה ללמידה
+                {isLoading ? (
+                  <>
+                    <Loader2 className="ml-2 h-4 w-4 animate-spin" />
+                    נרשם...
+                  </>
+                ) : (
+                  'כניסה ללמידה'
+                )}
               </Button>
 
               <p className="text-sm text-center text-slate-600">

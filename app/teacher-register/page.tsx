@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,10 +22,15 @@ import {
   Download,
   Mail,
   Phone,
-  GraduationCap
+  GraduationCap,
+  Loader2
 } from 'lucide-react';
+import { signUpUser } from '@/lib/auth-helpers';
+import { toast } from 'sonner';
 
 export default function TeacherRegister() {
+  const router = useRouter();
+  const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -36,8 +42,44 @@ export default function TeacherRegister() {
     teachingField: '',
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (formData.password !== formData.confirmPassword) {
+      toast.error('הסיסמאות אינן תואמות');
+      return;
+    }
+
+    if (formData.password.length < 6) {
+      toast.error('הסיסמה חייבת להכיל לפחות 6 תווים');
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      const fullName = `${formData.firstName} ${formData.lastName}`.trim();
+
+      const result = await signUpUser({
+        email: formData.email,
+        password: formData.password,
+        fullName: fullName || formData.username,
+        role: 'teacher',
+        schoolName: formData.institution || 'בית ספר ברירת מחדל',
+      });
+
+      if (result.success) {
+        toast.success('הרישום הושלם בהצלחה!');
+        router.push('/dashboard');
+      } else {
+        toast.error(result.error || 'שגיאה ברישום');
+      }
+    } catch (error: any) {
+      toast.error('שגיאה בלתי צפויה');
+      console.error('Registration error:', error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -205,9 +247,17 @@ export default function TeacherRegister() {
 
                     <Button
                       type="submit"
-                      className="w-full bg-teal-600 hover:bg-teal-700 text-white h-12 text-base rounded-md"
+                      disabled={isLoading}
+                      className="w-full bg-teal-600 hover:bg-teal-700 text-white h-12 text-base rounded-md disabled:opacity-50"
                     >
-                      יצירת חשבון מורה
+                      {isLoading ? (
+                        <>
+                          <Loader2 className="ml-2 h-4 w-4 animate-spin" />
+                          נרשם...
+                        </>
+                      ) : (
+                        'יצירת חשבון מורה'
+                      )}
                     </Button>
 
                     <div className="text-center">
