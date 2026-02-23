@@ -9,6 +9,8 @@ export interface SignUpData {
   role: UserRole;
   schoolName?: string;
   courseCode?: string;
+  phone?: string;
+  bio?: string;
 }
 
 export interface AuthResponse {
@@ -19,7 +21,7 @@ export interface AuthResponse {
 
 export async function signUpUser(data: SignUpData): Promise<AuthResponse> {
   try {
-    const { email, password, fullName, role, schoolName, courseCode } = data;
+    const { email, password, fullName, role, schoolName, courseCode, phone, bio } = data;
 
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email,
@@ -76,7 +78,12 @@ export async function signUpUser(data: SignUpData): Promise<AuthResponse> {
       id: userId,
       role: role,
       full_name: fullName,
+      email: email,
+      phone: phone || null,
+      bio: bio || null,
       school_id: schoolId,
+      is_active: true,
+      last_login_at: new Date().toISOString(),
     }]);
 
     if (profileError) {
@@ -105,6 +112,10 @@ export async function signInUser(email: string, password: string): Promise<AuthR
     if (!data.user) {
       return { success: false, error: 'Login failed' };
     }
+
+    await (supabase as any).from('profiles').update({
+      last_login_at: new Date().toISOString(),
+    }).eq('id', data.user.id);
 
     return { success: true, userId: data.user.id };
   } catch (error: any) {

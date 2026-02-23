@@ -35,6 +35,7 @@ export default function TeacherRegister() {
     firstName: '',
     lastName: '',
     email: '',
+    phone: '',
     username: '',
     password: '',
     confirmPassword: '',
@@ -66,6 +67,7 @@ export default function TeacherRegister() {
         fullName: fullName || formData.username,
         role: 'teacher',
         schoolName: formData.institution || 'בית ספר ברירת מחדל',
+        phone: formData.phone || undefined,
       });
 
       if (result.success) {
@@ -166,6 +168,22 @@ export default function TeacherRegister() {
                         placeholder="rachel@school.ac.il"
                         value={formData.email}
                         onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                        className="text-left"
+                        dir="ltr"
+                        required
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="phone" className="text-sm font-medium text-slate-700 text-right block">
+                        טלפון (אופציונלי)
+                      </Label>
+                      <Input
+                        id="phone"
+                        type="tel"
+                        placeholder="050-1234567"
+                        value={formData.phone}
+                        onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                         className="text-left"
                         dir="ltr"
                       />

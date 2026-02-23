@@ -16,6 +16,7 @@ export default function StudentRegisterPage() {
   const [formData, setFormData] = useState({
     fullName: '',
     email: '',
+    phone: '',
     password: '',
     courseCode: ''
   });
@@ -42,6 +43,7 @@ export default function StudentRegisterPage() {
         fullName: formData.fullName,
         role: 'student',
         courseCode: formData.courseCode || undefined,
+        phone: formData.phone || undefined,
       });
 
       if (result.success) {
@@ -116,6 +118,37 @@ export default function StudentRegisterPage() {
                 <p className="text-xs text-slate-500 text-right">
                   שם המשתמש אשר עלי זה יבוצע כניסה והצגת קורסי
                 </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="email" className="text-right block">
+                  דוא״ל
+                </Label>
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="student@example.com"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  className="text-left"
+                  dir="ltr"
+                  required
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="phone" className="text-right block">
+                  טלפון (אופציונלי)
+                </Label>
+                <Input
+                  id="phone"
+                  type="tel"
+                  placeholder="050-1234567"
+                  value={formData.phone}
+                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  className="text-left"
+                  dir="ltr"
+                />
               </div>
 
               <div className="space-y-2">
