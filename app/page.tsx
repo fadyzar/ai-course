@@ -35,16 +35,16 @@ export default function Home() {
             </div>
 
             <nav className="hidden lg:flex items-center gap-6 text-sm">
-              <Link href="#" className="text-slate-600 hover:text-slate-900">דף הבית</Link>
+              <Link href="/" className="text-slate-600 hover:text-slate-900">דף הבית</Link>
               <Link href="#" className="text-slate-600 hover:text-slate-900">יצירת קורס</Link>
               <Link href="#" className="text-slate-600 hover:text-slate-900">מדריך תבניות</Link>
-              <Link href="#" className="text-slate-600 hover:text-slate-900">רישוי מורה</Link>
-              <Link href="#" className="text-slate-600 hover:text-slate-900">רישוי תלמיד</Link>
+              <Link href="/teacher-register" className="text-slate-600 hover:text-slate-900">רישום מורה</Link>
+              <Link href="#" className="text-slate-600 hover:text-slate-900">רישום תלמיד</Link>
               <Link href="#" className="text-slate-600 hover:text-slate-900">כתיבת עיצונים</Link>
               <Link href="#" className="text-slate-600 hover:text-slate-900">אודות תלמיד</Link>
               <Link href="#" className="text-slate-600 hover:text-slate-900">צור קשר</Link>
               <Link href="#" className="text-slate-600 hover:text-slate-900">EN / HE</Link>
-              <Link href="#" className="text-slate-600 hover:text-slate-900">התחברות</Link>
+              <Link href="/auth/login" className="text-slate-600 hover:text-slate-900">התחברות</Link>
             </nav>
 
             <Button asChild className="bg-cyan-400 hover:bg-cyan-500 text-white rounded-md px-6">
