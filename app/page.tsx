@@ -39,7 +39,7 @@ export default function Home() {
               <Link href="#" className="text-slate-600 hover:text-slate-900">יצירת קורס</Link>
               <Link href="#" className="text-slate-600 hover:text-slate-900">מדריך תבניות</Link>
               <Link href="/teacher-register" className="text-slate-600 hover:text-slate-900">רישום מורה</Link>
-              <Link href="#" className="text-slate-600 hover:text-slate-900">רישום תלמיד</Link>
+              <Link href="/student-register" className="text-slate-600 hover:text-slate-900">רישום תלמיד</Link>
               <Link href="#" className="text-slate-600 hover:text-slate-900">כתיבת עיצונים</Link>
               <Link href="#" className="text-slate-600 hover:text-slate-900">אודות תלמיד</Link>
               <Link href="#" className="text-slate-600 hover:text-slate-900">צור קשר</Link>
