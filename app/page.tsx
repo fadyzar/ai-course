@@ -27,29 +27,29 @@ export default function Home() {
       <header className="border-b bg-white sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6">
           <div className="flex justify-between items-center h-16">
-            <Button className="bg-cyan-400 hover:bg-cyan-500 text-white rounded-md px-6">
-              הרשמה
-            </Button>
-
-            <nav className="hidden lg:flex items-center gap-6 text-sm">
-              <Link href="#" className="text-slate-600 hover:text-slate-900">התחברות</Link>
-              <Link href="#" className="text-slate-600 hover:text-slate-900">EN / HE</Link>
-              <Link href="#" className="text-slate-600 hover:text-slate-900">צור קשר</Link>
-              <Link href="#" className="text-slate-600 hover:text-slate-900">אודות תלמיד</Link>
-              <Link href="#" className="text-slate-600 hover:text-slate-900">כתיבת עיצונים</Link>
-              <Link href="#" className="text-slate-600 hover:text-slate-900">רישוי תלמיד</Link>
-              <Link href="#" className="text-slate-600 hover:text-slate-900">רישוי מורה</Link>
-              <Link href="#" className="text-slate-600 hover:text-slate-900">מדריך תבניות</Link>
-              <Link href="#" className="text-slate-600 hover:text-slate-900">יצירת קורס</Link>
-              <Link href="#" className="text-slate-600 hover:text-slate-900">דף הבית</Link>
-            </nav>
-
             <div className="flex items-center gap-2">
-              <span className="text-xl font-bold text-slate-900">SlidesUp Learning</span>
               <div className="w-8 h-8 bg-cyan-400 rounded flex items-center justify-center">
                 <Download className="h-4 w-4 text-white" />
               </div>
+              <span className="text-xl font-bold text-slate-900">SlidesUp Learning</span>
             </div>
+
+            <nav className="hidden lg:flex items-center gap-6 text-sm">
+              <Link href="#" className="text-slate-600 hover:text-slate-900">דף הבית</Link>
+              <Link href="#" className="text-slate-600 hover:text-slate-900">יצירת קורס</Link>
+              <Link href="#" className="text-slate-600 hover:text-slate-900">מדריך תבניות</Link>
+              <Link href="#" className="text-slate-600 hover:text-slate-900">רישוי מורה</Link>
+              <Link href="#" className="text-slate-600 hover:text-slate-900">רישוי תלמיד</Link>
+              <Link href="#" className="text-slate-600 hover:text-slate-900">כתיבת עיצונים</Link>
+              <Link href="#" className="text-slate-600 hover:text-slate-900">אודות תלמיד</Link>
+              <Link href="#" className="text-slate-600 hover:text-slate-900">צור קשר</Link>
+              <Link href="#" className="text-slate-600 hover:text-slate-900">EN / HE</Link>
+              <Link href="#" className="text-slate-600 hover:text-slate-900">התחברות</Link>
+            </nav>
+
+            <Button className="bg-cyan-400 hover:bg-cyan-500 text-white rounded-md px-6">
+              הרשמה
+            </Button>
           </div>
         </div>
       </header>
