@@ -31,7 +31,7 @@ export default function Home() {
               <div className="w-8 h-8 bg-cyan-400 rounded flex items-center justify-center">
                 <Download className="h-4 w-4 text-white" />
               </div>
-              <span className="text-xl font-bold text-slate-900">Slid11esUp Learning</span>
+              <span className="text-xl font-bold text-slate-900">Slide2Course </span>
             </div>
 
             <nav className="hidden lg:flex items-center gap-6 text-sm">
