@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { ArrowLeft, Settings, Info, Eye, Download, Loader as Loader2 } from 'lucide-react';
+import { ArrowLeft, Info, Eye, Download, Loader as Loader2, Presentation } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 
@@ -135,7 +135,35 @@ export default function CourseBuilderPage() {
     }
   };
 
-  const handleStartProcessing = async () => {
+  const downloadHtml = async (session: any, supabaseUrl: string, supabaseKey: string) => {
+    const response = await fetch(`${supabaseUrl}/functions/v1/export-html-course`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'apikey': supabaseKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ courseId }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: 'שגיאה לא ידועה' }));
+      throw new Error(err.error || 'Export failed');
+    }
+
+    const { html, filename } = await response.json();
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || 'course.html';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleConvertToPresentation = async () => {
     try {
       const currentAssets = assets.length > 0 ? assets : (await supabase
         .from('course_assets')
@@ -154,19 +182,19 @@ export default function CourseBuilderPage() {
         return;
       }
 
-      setIsProcessing(true);
-      toast.info('מתחיל עיבוד הקורס עם AI...');
-
-      await (supabase.from('courses') as any)
-        .update({ status: 'processing' })
-        .eq('id', courseId);
-
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
       const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
       if (!supabaseUrl || !supabaseKey) {
         throw new Error('חסרות הגדרות מערכת');
       }
+
+      setIsProcessing(true);
+      toast.info('מעבד את הקורס עם AI...');
+
+      await (supabase.from('courses') as any)
+        .update({ status: 'processing' })
+        .eq('id', courseId);
 
       for (const asset of currentAssets) {
         toast.info(`מעבד קובץ: ${asset.original_name}`);
@@ -190,12 +218,17 @@ export default function CourseBuilderPage() {
         toast.success(`הקובץ ${asset.original_name} עובד - ${result.sections} פרקים, ${result.questions} שאלות`);
       }
 
+      toast.info('מייצא קובץ HTML...');
+      await downloadHtml(session, supabaseUrl, supabaseKey);
+      toast.success('הקורס יוצא בהצלחה!');
+
       await loadCourse();
     } catch (error: any) {
-      toast.error('שגיאה בעיבוד: ' + error.message);
+      toast.error('שגיאה: ' + error.message);
       await (supabase.from('courses') as any)
         .update({ status: 'draft' })
         .eq('id', courseId);
+    } finally {
       setIsProcessing(false);
     }
   };
@@ -212,32 +245,9 @@ export default function CourseBuilderPage() {
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
       const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-      const response = await fetch(`${supabaseUrl}/functions/v1/export-html-course`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'apikey': supabaseKey || '',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ courseId }),
-      });
+      if (!supabaseUrl || !supabaseKey) throw new Error('חסרות הגדרות מערכת');
 
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Export failed');
-      }
-
-      const { html, filename } = await response.json();
-      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename || 'course.html';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
+      await downloadHtml(session, supabaseUrl, supabaseKey);
       toast.success('הקורס יוצא כקובץ HTML בהצלחה!');
     } catch (error: any) {
       toast.error('שגיאה בייצוא: ' + error.message);
@@ -277,6 +287,20 @@ export default function CourseBuilderPage() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            {assets.length > 0 && (
+              <Button
+                onClick={handleConvertToPresentation}
+                disabled={isProcessing}
+                className="flex-1 md:flex-none bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                {isProcessing ? (
+                  <Loader2 className="h-4 w-4 ml-2 animate-spin" />
+                ) : (
+                  <Presentation className="h-4 w-4 ml-2" />
+                )}
+                {isProcessing ? 'מעבד...' : 'המר למצגת'}
+              </Button>
+            )}
             {course.status === 'ready' && (
               <>
                 <Button asChild variant="default" size="lg" className="flex-1 md:flex-none">
@@ -300,14 +324,6 @@ export default function CourseBuilderPage() {
                 </Button>
               </>
             )}
-            <Button onClick={handleStartProcessing} variant="outline" disabled={isProcessing} className="flex-1 md:flex-none">
-              {isProcessing ? (
-                <Loader2 className="h-4 w-4 ml-2 animate-spin" />
-              ) : (
-                <Settings className="h-4 w-4 ml-2" />
-              )}
-              {isProcessing ? 'מעבד...' : 'עבד מחדש'}
-            </Button>
           </div>
         </div>
 
@@ -348,9 +364,8 @@ export default function CourseBuilderPage() {
                   hasAssets={assets.length > 0}
                   onUploadComplete={() => {
                     loadAssets();
-                    toast.success('הקובץ הועלה בהצלחה! כעת תוכל לעבד את הקורס.');
+                    toast.success('הקובץ הועלה בהצלחה! לחץ על "המר למצגת" כדי לייצר את הקורס.');
                   }}
-                  onStartProcessing={handleStartProcessing}
                 />
               </TabsContent>
               <TabsContent value="files">
