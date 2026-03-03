@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { ArrowLeft, Settings, Info, Eye, Download, Loader as Loader2 } from 'lucide-react';
+import { ArrowLeft, Settings, Info, Eye, Download, Loader as Loader2, Presentation } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 
@@ -32,6 +32,7 @@ export default function CourseBuilderPage() {
   const [loading, setLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   useEffect(() => {
     if (courseId) {
@@ -200,6 +201,45 @@ export default function CourseBuilderPage() {
     }
   };
 
+  const handleDownloadOriginal = async () => {
+    try {
+      setIsDownloading(true);
+      const currentAssets = assets.length > 0 ? assets : (await supabase
+        .from('course_assets')
+        .select('*')
+        .eq('course_id', courseId)
+        .order('created_at', { ascending: false })).data || [];
+
+      if (currentAssets.length === 0) {
+        toast.error('אין קבצים מקוריים להוריד');
+        return;
+      }
+
+      for (const asset of currentAssets) {
+        const { data, error } = await supabase.storage
+          .from('course-assets')
+          .download(asset.storage_path);
+
+        if (error) throw error;
+
+        const url = URL.createObjectURL(data);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = asset.original_name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+
+      toast.success('הקבצים המקוריים הורדו בהצלחה!');
+    } catch (error: any) {
+      toast.error('שגיאה בהורדה: ' + error.message);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   const handleExportHtml = async () => {
     try {
       setIsExporting(true);
@@ -277,6 +317,21 @@ export default function CourseBuilderPage() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            {assets.length > 0 && (
+              <Button
+                onClick={handleDownloadOriginal}
+                variant="outline"
+                disabled={isDownloading}
+                className="flex-1 md:flex-none"
+              >
+                {isDownloading ? (
+                  <Loader2 className="h-4 w-4 ml-2 animate-spin" />
+                ) : (
+                  <Presentation className="h-4 w-4 ml-2" />
+                )}
+                המר למצגת
+              </Button>
+            )}
             {course.status === 'ready' && (
               <>
                 <Button asChild variant="default" size="lg" className="flex-1 md:flex-none">
