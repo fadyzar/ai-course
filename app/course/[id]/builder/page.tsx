@@ -204,37 +204,43 @@ export default function CourseBuilderPage() {
   const handleDownloadOriginal = async () => {
     try {
       setIsDownloading(true);
-      const currentAssets = assets.length > 0 ? assets : (await supabase
-        .from('course_assets')
-        .select('*')
-        .eq('course_id', courseId)
-        .order('created_at', { ascending: false })).data || [];
-
-      if (currentAssets.length === 0) {
-        toast.error('אין קבצים מקוריים להוריד');
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast.error('נא להתחבר מחדש');
         return;
       }
 
-      for (const asset of currentAssets) {
-        const { data, error } = await supabase.storage
-          .from('course-assets')
-          .download(asset.storage_path);
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-        if (error) throw error;
+      const response = await fetch(`${supabaseUrl}/functions/v1/export-html-course`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'apikey': supabaseKey || '',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ courseId }),
+      });
 
-        const url = URL.createObjectURL(data);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = asset.original_name;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Export failed');
       }
 
-      toast.success('הקבצים המקוריים הורדו בהצלחה!');
+      const { html, filename } = await response.json();
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename || 'course.html';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success('הקורס יוצא בהצלחה!');
     } catch (error: any) {
-      toast.error('שגיאה בהורדה: ' + error.message);
+      toast.error('שגיאה בייצוא: ' + error.message);
     } finally {
       setIsDownloading(false);
     }
