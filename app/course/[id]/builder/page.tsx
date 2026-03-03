@@ -213,7 +213,7 @@ export default function CourseBuilderPage() {
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
       const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-      const response = await fetch(`${supabaseUrl}/functions/v1/export-html-course`, {
+      const response = await fetch(`${supabaseUrl}/functions/v1/convert-direct`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
@@ -238,7 +238,7 @@ export default function CourseBuilderPage() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      toast.success('הקורס יוצא בהצלחה!');
+      toast.success('הקובץ הומר בהצלחה!');
     } catch (error: any) {
       toast.error('שגיאה בייצוא: ' + error.message);
     } finally {
