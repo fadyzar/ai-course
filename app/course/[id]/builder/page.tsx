@@ -11,10 +11,10 @@ import { ProcessingStatus } from '@/components/course/ProcessingStatus';
 import { CourseBuilderWizard } from '@/components/course/CourseBuilderWizard';
 import { Database } from '@/types/database.types';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { ArrowLeft, Play, Settings, Info, Eye, Download, Loader2 } from 'lucide-react';
+import { ArrowLeft, Settings, Info, Eye, Download, Loader as Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 
@@ -64,7 +64,7 @@ export default function CourseBuilderPage() {
           setCourse(updatedCourse);
 
           if (updatedCourse.status === 'ready') {
-            toast.success('🎉 הקורס מוכן! אפשר לצפות בו עכשיו.');
+            toast.success('הקורס מוכן! אפשר לצפות בו עכשיו.');
           } else if (updatedCourse.status === 'processing') {
             toast.info('מעבד את הקורס... זה יכול לקחת כמה רגעים');
           }
@@ -137,44 +137,66 @@ export default function CourseBuilderPage() {
 
   const handleStartProcessing = async () => {
     try {
-      toast.info('מתחיל עיבוד הקורס...');
+      const currentAssets = assets.length > 0 ? assets : (await supabase
+        .from('course_assets')
+        .select('*')
+        .eq('course_id', courseId)
+        .order('created_at', { ascending: false })).data || [];
 
-      const { error } = await (supabase.from('jobs') as any).insert({
-        course_id: courseId,
-        type: 'rebuild_course',
-        status: 'queued',
-      });
+      if (currentAssets.length === 0) {
+        toast.error('אין קבצים להמיר. אנא העלה קובץ תחילה.');
+        return;
+      }
 
-      if (error) throw error;
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast.error('נא להתחבר מחדש');
+        return;
+      }
 
-      const { error: updateError } = await (supabase
-        .from('courses') as any)
+      setIsProcessing(true);
+      toast.info('מתחיל עיבוד הקורס עם AI...');
+
+      await (supabase.from('courses') as any)
         .update({ status: 'processing' })
         .eq('id', courseId);
 
-      if (updateError) throw updateError;
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-      loadCourse();
-
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-        const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-        if (supabaseUrl && supabaseKey) {
-          fetch(`${supabaseUrl}/functions/v1/worker-process-jobs`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${session.access_token}`,
-              'apikey': supabaseKey,
-              'Content-Type': 'application/json',
-            },
-          }).catch((err) => {
-            console.error('Worker trigger failed:', err);
-          });
-        }
+      if (!supabaseUrl || !supabaseKey) {
+        throw new Error('חסרות הגדרות מערכת');
       }
+
+      for (const asset of currentAssets) {
+        toast.info(`מעבד קובץ: ${asset.original_name}`);
+
+        const response = await fetch(`${supabaseUrl}/functions/v1/convert-with-ai`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'apikey': supabaseKey,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ courseId, assetId: asset.id }),
+        });
+
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({ error: 'שגיאה לא ידועה' }));
+          throw new Error(err.error || `שגיאה בעיבוד ${asset.original_name}`);
+        }
+
+        const result = await response.json();
+        toast.success(`הקובץ ${asset.original_name} עובד - ${result.sections} פרקים, ${result.questions} שאלות`);
+      }
+
+      await loadCourse();
     } catch (error: any) {
-      toast.error('שגיאה בהתחלת עיבוד: ' + error.message);
+      toast.error('שגיאה בעיבוד: ' + error.message);
+      await (supabase.from('courses') as any)
+        .update({ status: 'draft' })
+        .eq('id', courseId);
+      setIsProcessing(false);
     }
   };
 
@@ -279,8 +301,12 @@ export default function CourseBuilderPage() {
               </>
             )}
             <Button onClick={handleStartProcessing} variant="outline" disabled={isProcessing} className="flex-1 md:flex-none">
-              <Settings className="h-4 w-4 ml-2" />
-              עבד מחדש
+              {isProcessing ? (
+                <Loader2 className="h-4 w-4 ml-2 animate-spin" />
+              ) : (
+                <Settings className="h-4 w-4 ml-2" />
+              )}
+              {isProcessing ? 'מעבד...' : 'עבד מחדש'}
             </Button>
           </div>
         </div>
@@ -289,10 +315,9 @@ export default function CourseBuilderPage() {
           <Alert className="bg-blue-50 border-blue-200 border-2">
             <Info className="h-4 w-4 text-blue-600" />
             <AlertDescription className="text-blue-800">
-              <strong className="block mb-2">👋 ברוך הבא לבונה הקורסים!</strong>
+              <strong className="block mb-2">ברוך הבא לבונה הקורסים!</strong>
               <p className="text-sm">
-                אפשר להתחיל עם תוכן דמו כדי לראות איך זה עובד, או להעלות קובץ משלך (PPTX, PDF, מסמך)
-                והמערכת תבנה קורס דיגיטלי אינטראקטיבי עם שאלות אוטומטיות.
+                העלה קובץ (PPTX, PDF, מסמך) והמערכת תבנה קורס דיגיטלי אינטראקטיבי עם שאלות אוטומטיות.
               </p>
             </AlertDescription>
           </Alert>
@@ -349,7 +374,7 @@ export default function CourseBuilderPage() {
               <Alert className="bg-green-50 border-green-200 border-2">
                 <Info className="h-4 w-4 text-green-600" />
                 <AlertDescription className="text-green-800">
-                  <strong className="block mb-2">🎉 הקורס מוכן!</strong>
+                  <strong className="block mb-2">הקורס מוכן!</strong>
                   <p className="text-sm">
                     עכשיו אפשר לצפות בקורס, להתחיל ללמוד, או להוסיף עוד קבצים ולעבד מחדש.
                   </p>
