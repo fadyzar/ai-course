@@ -238,6 +238,12 @@ export default function CourseBuilderPage() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+
+      await (supabase.from('courses') as any)
+        .update({ status: 'ready' })
+        .eq('id', courseId);
+
+      await loadCourse();
       toast.success('הקובץ הומר בהצלחה!');
     } catch (error: any) {
       toast.error('שגיאה בייצוא: ' + error.message);
@@ -409,9 +415,9 @@ export default function CourseBuilderPage() {
                   hasAssets={assets.length > 0}
                   onUploadComplete={() => {
                     loadAssets();
-                    toast.success('הקובץ הועלה בהצלחה! כעת תוכל לעבד את הקורס.');
+                    toast.success('הקובץ הועלה בהצלחה! כעת תוכל להמיר למצגת.');
                   }}
-                  onStartProcessing={handleStartProcessing}
+                  onStartProcessing={handleDownloadOriginal}
                 />
               </TabsContent>
               <TabsContent value="files">
