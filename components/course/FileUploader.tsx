@@ -5,7 +5,7 @@ import { useDropzone } from 'react-dropzone';
 import { supabase } from '@/lib/supabase';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Upload, FileText, Loader2, AlertCircle, Presentation } from 'lucide-react';
+import { Upload, FileText, Loader as Loader2, CircleAlert as AlertCircle, Presentation } from 'lucide-react';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
