@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { ArrowLeft, Settings, Info, Eye, Download, Loader as Loader2 } from 'lucide-react';
+import { ArrowLeft, Settings, Info, Eye, Download, Loader as Loader2, Presentation } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 
@@ -32,6 +32,7 @@ export default function CourseBuilderPage() {
   const [loading, setLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   useEffect(() => {
     if (courseId) {
@@ -200,6 +201,57 @@ export default function CourseBuilderPage() {
     }
   };
 
+  const handleDownloadOriginal = async () => {
+    try {
+      setIsDownloading(true);
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast.error('נא להתחבר מחדש');
+        return;
+      }
+
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+      const response = await fetch(`${supabaseUrl}/functions/v1/convert-direct`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'apikey': supabaseKey || '',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ courseId }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Export failed');
+      }
+
+      const { html, filename } = await response.json();
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename || 'course.html';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      await (supabase.from('courses') as any)
+        .update({ status: 'ready' })
+        .eq('id', courseId);
+
+      await loadCourse();
+      toast.success('הקובץ הומר בהצלחה!');
+    } catch (error: any) {
+      toast.error('שגיאה בייצוא: ' + error.message);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   const handleExportHtml = async () => {
     try {
       setIsExporting(true);
@@ -277,6 +329,21 @@ export default function CourseBuilderPage() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            {assets.length > 0 && (
+              <Button
+                onClick={handleDownloadOriginal}
+                variant="outline"
+                disabled={isDownloading}
+                className="flex-1 md:flex-none"
+              >
+                {isDownloading ? (
+                  <Loader2 className="h-4 w-4 ml-2 animate-spin" />
+                ) : (
+                  <Presentation className="h-4 w-4 ml-2" />
+                )}
+                המר למצגת
+              </Button>
+            )}
             {course.status === 'ready' && (
               <>
                 <Button asChild variant="default" size="lg" className="flex-1 md:flex-none">
@@ -348,9 +415,9 @@ export default function CourseBuilderPage() {
                   hasAssets={assets.length > 0}
                   onUploadComplete={() => {
                     loadAssets();
-                    toast.success('הקובץ הועלה בהצלחה! כעת תוכל לעבד את הקורס.');
+                    toast.success('הקובץ הועלה בהצלחה! כעת תוכל להמיר למצגת.');
                   }}
-                  onStartProcessing={handleStartProcessing}
+                  onStartProcessing={handleDownloadOriginal}
                 />
               </TabsContent>
               <TabsContent value="files">

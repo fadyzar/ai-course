@@ -5,7 +5,7 @@ import { useDropzone } from 'react-dropzone';
 import { supabase } from '@/lib/supabase';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Upload, FileText, Loader2, AlertCircle } from 'lucide-react';
+import { Upload, FileText, Loader as Loader2, CircleAlert as AlertCircle, Presentation } from 'lucide-react';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
@@ -178,22 +178,22 @@ export function FileUploader({ courseId, onUploadComplete, onStartProcessing, ha
       )}
 
       {hasAssets && onStartProcessing && (
-        <Card className="bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200 border-2">
+        <Card className="bg-gradient-to-r from-blue-50 to-sky-50 border-blue-200 border-2">
           <CardContent className="p-6">
             <div className="flex flex-col md:flex-row items-center justify-between gap-4">
               <div className="flex-1 text-center md:text-right">
                 <h3 className="text-lg font-bold text-slate-900 mb-1">הקבצים שלך מוכנים!</h3>
                 <p className="text-sm text-slate-600">
-                  לחץ על הכפתור כדי להמיר את הקבצים לקורס אינטראקטיבי
+                  לחץ על הכפתור כדי להמיר את הקובץ למצגת HTML להורדה
                 </p>
               </div>
               <Button
                 onClick={onStartProcessing}
                 size="lg"
-                className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-lg hover:shadow-xl transition-all w-full md:w-auto"
+                className="bg-gradient-to-r from-blue-600 to-sky-600 hover:from-blue-700 hover:to-sky-700 text-white shadow-lg hover:shadow-xl transition-all w-full md:w-auto"
               >
-                <Upload className="h-5 w-5 ml-2" />
-                התחל עיבוד ובניית קורס
+                <Presentation className="h-5 w-5 ml-2" />
+                המר למצגת
               </Button>
             </div>
           </CardContent>
