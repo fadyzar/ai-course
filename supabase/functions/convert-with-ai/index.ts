@@ -327,17 +327,16 @@ Deno.serve(async (req: Request) => {
       console.log(`[STEP 9.${i + 1}b] Section created: ${section.id}`);
 
       const htmlContent = `
-        <div class="space-y-6">
-          <div class="prose prose-lg max-w-none">
-            <h2 class="text-3xl font-bold text-slate-900 mb-4">${sectionTitle}</h2>
-            <div class="bg-slate-50 p-6 rounded-lg mb-6">
-              <h3 class="text-xl font-semibold text-slate-800 mb-3">תוכן מקורי:</h3>
-              <p class="text-slate-700 whitespace-pre-wrap">${slide.content}</p>
+        <div class="slide-body">
+          <div class="slide-raw-content">
+            <p class="raw-text">${slide.content.replace(/\n/g, '<br/>')}</p>
+          </div>
+          <div class="slide-ai-summary">
+            <div class="summary-header">
+              <span class="summary-icon">✦</span>
+              <span class="summary-label">סיכום AI</span>
             </div>
-            <div class="bg-blue-50 p-6 rounded-lg">
-              <h3 class="text-xl font-semibold text-blue-900 mb-3">סיכום:</h3>
-              <p class="text-slate-800 leading-relaxed">${aiResult.summary}</p>
-            </div>
+            <p class="summary-text">${aiResult.summary}</p>
           </div>
         </div>
       `;
