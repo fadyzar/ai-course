@@ -114,7 +114,8 @@ export function CreateCourseDialog() {
 
       if (sourceType === 'upload' && file) {
         const ext = file.name.split('.').pop()?.toLowerCase() || 'pdf';
-        const path = `${profile.id}/${course.id}/${Date.now()}.${ext}`;
+        const sanitizedName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+        const path = `${course.id}/${Date.now()}_${sanitizedName}`;
         const { error: uploadError } = await supabase.storage
           .from('course-assets')
           .upload(path, file, { contentType: file.type });
