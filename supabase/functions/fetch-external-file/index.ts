@@ -29,22 +29,40 @@ function encodeOneDriveShareUrl(shareUrl: string): string {
   return "u!" + base64.replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
 
+async function tryFetchDirect(url: string): Promise<Response | null> {
+  const headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/octet-stream,application/vnd.openxmlformats-officedocument.presentationml.presentation,*/*",
+  };
+
+  try {
+    const resp = await fetch(url, { headers, redirect: "follow" });
+    if (!resp.ok) return null;
+    const ct = resp.headers.get("content-type") || "";
+    if (ct.includes("text/html")) return null;
+    return resp;
+  } catch {
+    return null;
+  }
+}
+
 async function tryOneDriveApiDownload(shareUrl: string): Promise<Response | null> {
-  const urlObj = new URL(shareUrl);
+  const candidates: string[] = [shareUrl];
 
-  const redeemParam = urlObj.searchParams.get("redeem");
-  const shortUrl = redeemParam
-    ? (() => {
-        try {
-          return atob(redeemParam.replace(/-/g, "+").replace(/_/g, "/"));
-        } catch {
-          return null;
-        }
-      })()
-    : null;
+  try {
+    const urlObj = new URL(shareUrl);
+    const redeemParam = urlObj.searchParams.get("redeem");
+    if (redeemParam) {
+      try {
+        const decoded = atob(redeemParam.replace(/-/g, "+").replace(/_/g, "/"));
+        if (decoded.startsWith("http")) candidates.unshift(decoded);
+      } catch { /* ignore */ }
+    }
 
-  const candidates = [shareUrl];
-  if (shortUrl) candidates.unshift(shortUrl);
+    const withDownload = new URL(shareUrl);
+    withDownload.searchParams.set("download", "1");
+    candidates.push(withDownload.toString());
+  } catch { /* ignore */ }
 
   for (const candidate of candidates) {
     try {
@@ -63,6 +81,7 @@ async function tryOneDriveApiDownload(shareUrl: string): Promise<Response | null
       if (resp.ok) {
         const ct = resp.headers.get("content-type") || "";
         if (!ct.includes("text/html")) {
+          console.log(`[FETCH-EXTERNAL] OneDrive API succeeded for candidate`);
           return resp;
         }
       }
@@ -76,12 +95,16 @@ async function tryOneDriveApiDownload(shareUrl: string): Promise<Response | null
 async function downloadOneDriveFile(url: string): Promise<{ buffer: ArrayBuffer; contentType: string; filename: string }> {
   let resp: Response | null = null;
 
-  if (url.includes("onedrive.live.com") || url.includes("1drv.ms")) {
+  console.log(`[FETCH-EXTERNAL] Trying direct download first`);
+  resp = await tryFetchDirect(url);
+
+  if (!resp && (url.includes("onedrive.live.com") || url.includes("1drv.ms"))) {
+    console.log(`[FETCH-EXTERNAL] Trying OneDrive share API`);
     resp = await tryOneDriveApiDownload(url);
   }
 
   if (!resp) {
-    console.log(`[FETCH-EXTERNAL] Falling back to direct OneDrive fetch`);
+    console.log(`[FETCH-EXTERNAL] Trying direct fetch with follow redirects`);
     resp = await fetch(url, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
@@ -99,8 +122,24 @@ async function downloadOneDriveFile(url: string): Promise<{ buffer: ArrayBuffer;
 
   if (contentType.includes("text/html")) {
     const html = await resp.text();
-    if (html.includes("login") || html.includes("signin") || html.includes("Sign in")) {
+    if (html.includes("login.microsoftonline") || html.includes("login.live") || html.includes("Sign in") || html.includes("signin")) {
       throw new Error("OneDrive דורש כניסה לחשבון. יש להפוך את הקובץ לציבורי (כל מי שיש לו קישור יכול להציג).");
+    }
+    const downloadLinkMatch = html.match(/"downloadUrl"\s*:\s*"([^"]+)"/);
+    if (downloadLinkMatch) {
+      console.log(`[FETCH-EXTERNAL] Found download URL in HTML response`);
+      const directResp = await fetch(downloadLinkMatch[1], { redirect: "follow" });
+      if (directResp.ok) {
+        const directCt = directResp.headers.get("content-type") || "application/octet-stream";
+        if (!directCt.includes("text/html")) {
+          const buffer = await directResp.arrayBuffer();
+          const contentDisposition = directResp.headers.get("content-disposition") || "";
+          let filename = "onedrive_file";
+          const fnMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+          if (fnMatch) filename = fnMatch[1].replace(/['"]/g, "").trim();
+          return { buffer, contentType: directCt, filename };
+        }
+      }
     }
     throw new Error("OneDrive החזיר עמוד HTML במקום קובץ. ודא שהקובץ ציבורי.");
   }
