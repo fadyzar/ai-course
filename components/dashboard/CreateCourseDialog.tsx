@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { Progress } from '@/components/ui/progress';
 import {
   Dialog,
   DialogContent,
@@ -18,6 +19,69 @@ import { Plus, Loader as Loader2, Upload, Link2, Cloud, X, FileText, CircleAlert
 import { toast } from 'sonner';
 import { useDropzone } from 'react-dropzone';
 import { cn } from '@/lib/utils';
+
+const CHUNK_SIZE = 6 * 1024 * 1024;
+
+async function uploadLargeFile(
+  bucket: string,
+  path: string,
+  file: File,
+  onProgress: (pct: number) => void
+): Promise<void> {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token || supabaseKey;
+
+  const uploadUrl = `${supabaseUrl}/storage/v1/upload/resumable`;
+
+  const createRes = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'apikey': supabaseKey,
+      'Content-Type': 'application/offset+octet-stream',
+      'Upload-Length': String(file.size),
+      'Upload-Metadata': `bucketName ${btoa(bucket)},objectName ${btoa(path)},contentType ${btoa(file.type || 'application/octet-stream')}`,
+      'Tus-Resumable': '1.0.0',
+    },
+  });
+
+  if (!createRes.ok && createRes.status !== 201) {
+    const text = await createRes.text();
+    throw new Error(`שגיאה ביצירת upload: ${text}`);
+  }
+
+  const location = createRes.headers.get('Location');
+  if (!location) throw new Error('לא התקבל Location מהשרת');
+
+  const tusUrl = location.startsWith('http') ? location : `${supabaseUrl}${location}`;
+
+  let offset = 0;
+  while (offset < file.size) {
+    const chunk = file.slice(offset, offset + CHUNK_SIZE);
+    const patchRes = await fetch(tusUrl, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'apikey': supabaseKey,
+        'Content-Type': 'application/offset+octet-stream',
+        'Upload-Offset': String(offset),
+        'Tus-Resumable': '1.0.0',
+        'Content-Length': String(chunk.size),
+      },
+      body: chunk,
+    });
+
+    if (!patchRes.ok) {
+      const text = await patchRes.text();
+      throw new Error(`שגיאה בהעלאה: ${text}`);
+    }
+
+    offset += chunk.size;
+    onProgress(Math.round((offset / file.size) * 100));
+  }
+}
 
 type SourceType = 'upload' | 'google_drive' | 'canva';
 type FeedbackMode = 'immediate' | 'end' | 'none';
@@ -58,6 +122,7 @@ export function CreateCourseDialog() {
   const [file, setFile] = useState<File | null>(null);
   const [settings, setSettings] = useState<CourseSettings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const onDrop = useCallback((accepted: File[]) => {
     if (accepted.length > 0) {
@@ -88,6 +153,7 @@ export function CreateCourseDialog() {
     setSourceUrl('');
     setFile(null);
     setSettings(DEFAULT_SETTINGS);
+    setUploadProgress(0);
   };
 
   const triggerConvert = async (courseId: string, session: any) => {
@@ -138,10 +204,8 @@ export function CreateCourseDialog() {
         const sanitizedName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
         const storagePath = `${course.id}/${Date.now()}_${sanitizedName}`;
 
-        const { error: uploadError } = await supabase.storage
-          .from('course-assets')
-          .upload(storagePath, file, { contentType: file.type });
-        if (uploadError) throw uploadError;
+        setUploadProgress(0);
+        await uploadLargeFile('course-assets', storagePath, file, setUploadProgress);
 
         const { error: assetError } = await (supabase.from('course_assets') as any).insert({
           course_id: course.id,
@@ -287,7 +351,7 @@ export function CreateCourseDialog() {
                           <input {...getInputProps()} />
                           <Upload className="h-10 w-10 text-slate-400 mx-auto mb-3" />
                           <p className="font-semibold text-slate-700 mb-1">גרור קובץ לכאן או לחץ להעלאה</p>
-                          <p className="text-sm text-slate-500">PDF, PPTX, PPT, DOCX – עד 50MB</p>
+                          <p className="text-sm text-slate-500">PDF, PPTX, PPT, DOCX – עד 500MB</p>
                         </div>
                       )}
                       <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
@@ -399,14 +463,22 @@ export function CreateCourseDialog() {
                     <ChevronRight className="h-4 w-4" />
                     חזור
                   </Button>
-                  <Button
-                    onClick={handleCreate}
-                    disabled={loading}
-                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white gap-2"
-                  >
-                    {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-                    {loading ? 'יוצר קורס...' : 'צור קורס'}
-                  </Button>
+                  <div className="flex-1 flex flex-col gap-2">
+                    {loading && sourceType === 'upload' && uploadProgress > 0 && uploadProgress < 100 && (
+                      <div className="space-y-1">
+                        <Progress value={uploadProgress} className="h-2" />
+                        <p className="text-xs text-slate-500 text-center">מעלה קובץ... {uploadProgress}%</p>
+                      </div>
+                    )}
+                    <Button
+                      onClick={handleCreate}
+                      disabled={loading}
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white gap-2"
+                    >
+                      {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+                      {loading ? (uploadProgress > 0 && uploadProgress < 100 ? 'מעלה קובץ...' : 'יוצר קורס...') : 'צור קורס'}
+                    </Button>
+                  </div>
                 </>
               )}
             </div>
