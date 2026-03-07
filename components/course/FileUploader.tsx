@@ -43,6 +43,79 @@ const ACCEPTED_TYPES = {
   'application/x-7z-compressed': ['.7z'],
 };
 
+const CHUNK_SIZE = 6 * 1024 * 1024; // 6MB
+
+async function uploadFileResumable(
+  bucket: string,
+  path: string,
+  file: File,
+  onProgress: (pct: number) => void
+): Promise<void> {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token || supabaseKey;
+
+  // שלב 1: יצירת upload session
+  const createRes = await fetch(`${supabaseUrl}/storage/v1/upload/resumable`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'apikey': supabaseKey,
+      'x-upsert': 'true',
+      'Upload-Length': String(file.size),
+      'Upload-Metadata': [
+        `bucketName ${btoa(bucket)}`,
+        `objectName ${btoa(path)}`,
+        `contentType ${btoa(file.type || 'application/octet-stream')}`,
+        `cacheControl ${btoa('3600')}`,
+      ].join(','),
+      'Tus-Resumable': '1.0.0',
+      'Content-Length': '0',
+    },
+  });
+
+  if (!createRes.ok && createRes.status !== 201) {
+    const text = await createRes.text();
+    throw new Error(`שגיאה ביצירת upload: ${text}`);
+  }
+
+  const location = createRes.headers.get('Location');
+  if (!location) throw new Error('לא התקבל Location מהשרת');
+
+  const tusUrl = location.startsWith('http')
+    ? location
+    : `${supabaseUrl}${location}`;
+
+  // שלב 2: העלאה בחלקים
+  let offset = 0;
+  while (offset < file.size) {
+    const end = Math.min(offset + CHUNK_SIZE, file.size);
+    const chunk = file.slice(offset, end);
+
+    const patchRes = await fetch(tusUrl, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'apikey': supabaseKey,
+        'Content-Type': 'application/offset+octet-stream',
+        'Upload-Offset': String(offset),
+        'Tus-Resumable': '1.0.0',
+        'Content-Length': String(chunk.size),
+      },
+      body: chunk,
+    });
+
+    if (!patchRes.ok) {
+      const text = await patchRes.text();
+      throw new Error(`שגיאה בהעלאה: ${text}`);
+    }
+
+    offset = end;
+    onProgress(Math.round((offset / file.size) * 100));
+  }
+}
+
 export function FileUploader({ courseId, onUploadComplete, onStartProcessing, hasAssets }: FileUploaderProps) {
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState<{ [key: string]: number }>({});
@@ -63,16 +136,15 @@ export function FileUploader({ courseId, onUploadComplete, onStartProcessing, ha
 
           setProgress((prev) => ({ ...prev, [file.name]: 0 }));
 
-          const { error: uploadError } = await supabase.storage
-            .from('course-assets')
-            .upload(fileName, file, {
-              cacheControl: '3600',
-              upsert: false,
-            });
+          // העלאה עם TUS (תומך בקבצים גדולים)
+          await uploadFileResumable(
+            'course-assets',
+            fileName,
+            file,
+            (pct) => setProgress((prev) => ({ ...prev, [file.name]: Math.round(pct * 0.9) }))
+          );
 
-          if (uploadError) throw uploadError;
-
-          setProgress((prev) => ({ ...prev, [file.name]: 50 }));
+          setProgress((prev) => ({ ...prev, [file.name]: 95 }));
 
           const { error: dbError } = await (supabase.from('course_assets') as any).insert({
             course_id: courseId,
@@ -145,6 +217,20 @@ export function FileUploader({ courseId, onUploadComplete, onStartProcessing, ha
             <>
               <Loader2 className="h-12 w-12 text-blue-600 animate-spin" />
               <p className="text-lg font-medium">מעלה קבצים...</p>
+              {Object.entries(progress).map(([name, pct]) => (
+                <div key={name} className="w-full max-w-xs">
+                  <div className="flex justify-between text-xs text-slate-500 mb-1">
+                    <span className="truncate">{name}</span>
+                    <span>{pct}%</span>
+                  </div>
+                  <div className="h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
             </>
           ) : (
             <>
@@ -164,18 +250,6 @@ export function FileUploader({ courseId, onUploadComplete, onStartProcessing, ha
           )}
         </div>
       </Card>
-
-      {Object.keys(progress).length > 0 && (
-        <div className="space-y-2">
-          {Object.entries(progress).map(([fileName, prog]) => (
-            <div key={fileName} className="flex items-center space-x-3 space-x-reverse">
-              <FileText className="h-4 w-4 text-slate-400" />
-              <span className="text-sm flex-1">{fileName}</span>
-              <span className="text-sm text-slate-500">{prog}%</span>
-            </div>
-          ))}
-        </div>
-      )}
 
       {hasAssets && onStartProcessing && (
         <Card className="bg-gradient-to-r from-blue-50 to-sky-50 border-blue-200 border-2">
