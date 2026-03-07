@@ -90,6 +90,26 @@ export function CreateCourseDialog() {
     setSettings(DEFAULT_SETTINGS);
   };
 
+  const triggerConvert = async (courseId: string, session: any) => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const response = await fetch(`${supabaseUrl}/functions/v1/convert-direct`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'apikey': supabaseKey || '',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ courseId }),
+    });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: 'שגיאה לא ידועה' }));
+      toast.error('שגיאה בהמרה: ' + (err.error || 'שגיאה לא ידועה'));
+    } else {
+      toast.success('הקורס נוצר והומר בהצלחה!');
+    }
+  };
+
   const handleCreate = async () => {
     if (!profile?.id) return;
     setLoading(true);
@@ -110,35 +130,60 @@ export function CreateCourseDialog() {
         .single();
       if (courseError) throw courseError;
 
-      let assetStoragePath: string | null = null;
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('לא מחובר');
 
       if (sourceType === 'upload' && file) {
         const ext = file.name.split('.').pop()?.toLowerCase() || 'pdf';
         const sanitizedName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-        const path = `${course.id}/${Date.now()}_${sanitizedName}`;
+        const storagePath = `${course.id}/${Date.now()}_${sanitizedName}`;
+
         const { error: uploadError } = await supabase.storage
           .from('course-assets')
-          .upload(path, file, { contentType: file.type });
+          .upload(storagePath, file, { contentType: file.type });
         if (uploadError) throw uploadError;
 
         const { error: assetError } = await (supabase.from('course_assets') as any).insert({
           course_id: course.id,
           file_type: ext,
-          storage_path: path,
+          storage_path: storagePath,
           original_name: file.name,
           size_bytes: file.size,
           status: 'uploaded',
         });
         if (assetError) throw assetError;
 
-        assetStoragePath = path;
-      }
+        handleClose();
+        router.push(`/course/${course.id}/builder`);
+        triggerConvert(course.id, session);
 
-      handleClose();
+      } else if ((sourceType === 'google_drive' || sourceType === 'canva') && sourceUrl.trim()) {
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+        const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-      if (assetStoragePath) {
-        router.push(`/course/${course.id}/builder?autoConvert=1`);
+        toast.info('מוריד קובץ מהקישור...');
+
+        const fetchResp = await fetch(`${supabaseUrl}/functions/v1/fetch-external-file`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'apikey': supabaseKey || '',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ courseId: course.id, url: sourceUrl.trim() }),
+        });
+
+        if (!fetchResp.ok) {
+          const err = await fetchResp.json().catch(() => ({ error: 'שגיאה בהורדת הקובץ' }));
+          throw new Error(err.error || 'שגיאה בהורדת הקובץ');
+        }
+
+        handleClose();
+        router.push(`/course/${course.id}/builder`);
+        triggerConvert(course.id, session);
+
       } else {
+        handleClose();
         router.push(`/course/${course.id}/builder`);
       }
     } catch (error: any) {
@@ -260,16 +305,31 @@ export function CreateCourseDialog() {
                       <Input
                         value={sourceUrl}
                         onChange={e => setSourceUrl(e.target.value)}
-                        placeholder={sourceType === 'google_drive' ? 'https://drive.google.com/...' : 'https://www.canva.com/...'}
+                        placeholder={sourceType === 'google_drive' ? 'https://drive.google.com/file/d/...' : 'https://www.canva.com/...'}
                         dir="ltr"
                         className="h-11 text-sm font-mono"
                       />
-                      <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                        <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-amber-500" />
-                        <p className="text-xs text-amber-700">
-                          שקופית השער (כותרת היחידה) צריכה להיות <strong>בצבע צהוב</strong> או בתבנית שנבחרה – היא תומר ללשונית ניווט בסרגל.
-                        </p>
-                      </div>
+                      {sourceType === 'google_drive' && (
+                        <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-1.5">
+                          <p className="text-xs font-semibold text-blue-800">כיצד לשתף קובץ מ-Google Drive:</p>
+                          <ol className="text-xs text-blue-700 space-y-1 list-decimal list-inside">
+                            <li>לחץ על הקובץ ב-Google Drive &lt; שתף</li>
+                            <li>שנה ל: <strong>כל מי שיש לו קישור יכול להציג</strong></li>
+                            <li>העתק את הקישור והדבק כאן</li>
+                          </ol>
+                          <p className="text-xs text-blue-600 mt-1">תומך ב: PPTX, PDF, DOCX</p>
+                        </div>
+                      )}
+                      {sourceType === 'canva' && (
+                        <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-1.5">
+                          <p className="text-xs font-semibold text-blue-800">כיצד לייצא מ-Canva:</p>
+                          <ol className="text-xs text-blue-700 space-y-1 list-decimal list-inside">
+                            <li>ב-Canva לחץ על שתף &lt; הורד</li>
+                            <li>בחר פורמט PDF או PPTX</li>
+                            <li>לחלופין: שתף &lt; אפשר צפייה &lt; העתק קישור</li>
+                          </ol>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
