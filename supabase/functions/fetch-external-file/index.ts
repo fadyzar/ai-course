@@ -20,6 +20,78 @@ function extractGoogleDriveId(url: string): string | null {
   return null;
 }
 
+function isGoogleSheetsUrl(url: string): boolean {
+  return url.includes("/spreadsheets/d/");
+}
+
+function isGoogleDocsUrl(url: string): boolean {
+  return url.includes("/document/d/");
+}
+
+function isGoogleSlidesUrl(url: string): boolean {
+  return url.includes("/presentation/d/");
+}
+
+async function downloadGoogleSheetsFile(fileId: string): Promise<{ buffer: ArrayBuffer; contentType: string }> {
+  const exportUrl = `https://docs.google.com/spreadsheets/d/${fileId}/export?format=xlsx`;
+  console.log(`[FETCH-EXTERNAL] Downloading Google Sheets as XLSX: ${fileId}`);
+
+  const resp = await fetch(exportUrl, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    },
+    redirect: "follow",
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    if (text.includes("accounts.google.com") || text.includes("Sign in") || resp.status === 302 || resp.status === 401) {
+      throw new Error("Google Sheets דורש כניסה לחשבון. יש להפוך את הגיליון לציבורי (כל מי שיש לו קישור יכול להציג).");
+    }
+    throw new Error(`Google Sheets החזיר שגיאה ${resp.status}. ודא שהגיליון ציבורי.`);
+  }
+
+  const contentType = resp.headers.get("content-type") || "application/octet-stream";
+  if (contentType.includes("text/html")) {
+    const html = await resp.text();
+    if (html.includes("accounts.google.com") || html.includes("Sign in")) {
+      throw new Error("Google Sheets דורש כניסה לחשבון. יש להפוך את הגיליון לציבורי (כל מי שיש לו קישור יכול להציג).");
+    }
+    throw new Error("Google Sheets החזיר עמוד HTML במקום קובץ. ודא שהגדרת שיתוף ל'כל מי שיש לו קישור'.");
+  }
+
+  const buffer = await resp.arrayBuffer();
+  return { buffer, contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" };
+}
+
+async function downloadGoogleSlidesFile(fileId: string): Promise<{ buffer: ArrayBuffer; contentType: string }> {
+  const exportUrl = `https://docs.google.com/presentation/d/${fileId}/export/pptx`;
+  console.log(`[FETCH-EXTERNAL] Downloading Google Slides as PPTX: ${fileId}`);
+
+  const resp = await fetch(exportUrl, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    },
+    redirect: "follow",
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    if (text.includes("accounts.google.com") || text.includes("Sign in") || resp.status === 401) {
+      throw new Error("Google Slides דורש כניסה לחשבון. יש להפוך את המצגת לציבורית (כל מי שיש לו קישור יכול להציג).");
+    }
+    throw new Error(`Google Slides החזיר שגיאה ${resp.status}. ודא שהמצגת ציבורית.`);
+  }
+
+  const contentType = resp.headers.get("content-type") || "application/octet-stream";
+  if (contentType.includes("text/html")) {
+    throw new Error("Google Slides החזיר עמוד HTML במקום קובץ. ודא שהגדרת שיתוף ל'כל מי שיש לו קישור'.");
+  }
+
+  const buffer = await resp.arrayBuffer();
+  return { buffer, contentType: "application/vnd.openxmlformats-officedocument.presentationml.presentation" };
+}
+
 async function downloadGoogleDriveFile(fileId: string): Promise<{ buffer: ArrayBuffer; contentType: string }> {
   const downloadUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&authuser=0&confirm=t`;
 
@@ -90,6 +162,7 @@ function getExtFromContentType(contentType: string, filename: string): string {
   if (contentType.includes("presentationml") || contentType.includes("powerpoint")) return "pptx";
   if (contentType.includes("pdf")) return "pdf";
   if (contentType.includes("wordprocessingml") || contentType.includes("msword")) return "docx";
+  if (contentType.includes("spreadsheetml") || contentType.includes("excel")) return "xlsx";
   if (filename.includes(".")) return filename.split(".").pop()!.toLowerCase();
   return "pdf";
 }
@@ -136,7 +209,16 @@ Deno.serve(async (req: Request) => {
 
     console.log(`[FETCH-EXTERNAL] Google Drive file ID: ${fileId}`);
 
-    const { buffer, contentType } = await downloadGoogleDriveFile(fileId);
+    let buffer: ArrayBuffer;
+    let contentType: string;
+
+    if (isGoogleSheetsUrl(url)) {
+      ({ buffer, contentType } = await downloadGoogleSheetsFile(fileId));
+    } else if (isGoogleSlidesUrl(url)) {
+      ({ buffer, contentType } = await downloadGoogleSlidesFile(fileId));
+    } else {
+      ({ buffer, contentType } = await downloadGoogleDriveFile(fileId));
+    }
 
     if (buffer.byteLength === 0) {
       throw new Error("הקובץ שהורד ריק.");
@@ -152,6 +234,7 @@ Deno.serve(async (req: Request) => {
       pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
       pdf: "application/pdf",
       docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     };
     const uploadContentType = mimeMap[ext] || contentType;
 
