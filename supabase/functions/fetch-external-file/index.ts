@@ -180,22 +180,55 @@ async function tryDirectDownload(url: string): Promise<Response | null> {
   }
 }
 
+async function extractFileFromResponse(resp: Response): Promise<{ buffer: ArrayBuffer; contentType: string; filename: string }> {
+  const contentType = resp.headers.get("content-type") || "application/octet-stream";
+  const contentDisposition = resp.headers.get("content-disposition") || "";
+  let filename = "onedrive_file";
+  const fnMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+  if (fnMatch) filename = fnMatch[1].replace(/['"]/g, "").trim();
+  const buffer = await resp.arrayBuffer();
+  return { buffer, contentType, filename };
+}
+
+async function tryOneDriveResidDownload(resolvedUrl: string): Promise<Response | null> {
+  try {
+    const parsed = new URL(resolvedUrl);
+    const resid = parsed.searchParams.get("resid");
+    const authkey = parsed.searchParams.get("authkey");
+    const cid = parsed.searchParams.get("cid");
+    if (resid) {
+      const downloadUrl = `https://onedrive.live.com/download?resid=${encodeURIComponent(resid)}&authkey=${encodeURIComponent(authkey || "")}&cid=${encodeURIComponent(cid || "")}`;
+      console.log(`[FETCH-EXTERNAL] Trying resid download URL: ${downloadUrl}`);
+      return await tryDirectDownload(downloadUrl);
+    }
+  } catch {
+  }
+  return null;
+}
+
 async function downloadOneDriveFile(url: string): Promise<{ buffer: ArrayBuffer; contentType: string; filename: string }> {
   let resolvedUrl = url;
 
-  const redeemUrl = extractOneDriveRedeemUrl(url);
-  if (redeemUrl) {
-    console.log(`[FETCH-EXTERNAL] Found redeem URL, trying Graph API with it`);
-    const resp = await tryGraphApiDownload(redeemUrl);
-    if (resp) {
-      const contentType = resp.headers.get("content-type") || "application/octet-stream";
-      const contentDisposition = resp.headers.get("content-disposition") || "";
-      let filename = "onedrive_file";
-      const fnMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
-      if (fnMatch) filename = fnMatch[1].replace(/['"]/g, "").trim();
-      const buffer = await resp.arrayBuffer();
-      return { buffer, contentType, filename };
-    }
+  const redeemShortUrl = extractOneDriveRedeemUrl(url);
+  if (redeemShortUrl) {
+    console.log(`[FETCH-EXTERNAL] Found redeem short URL: ${redeemShortUrl}, resolving...`);
+    const resolvedRedeemUrl = await resolveShortUrl(redeemShortUrl);
+    console.log(`[FETCH-EXTERNAL] Resolved redeem URL to: ${resolvedRedeemUrl}`);
+
+    let resp = await tryGraphApiDownload(resolvedRedeemUrl);
+    if (resp) return await extractFileFromResponse(resp);
+
+    resp = await tryGraphApiDownload(redeemShortUrl);
+    if (resp) return await extractFileFromResponse(resp);
+
+    resp = await tryOneDriveResidDownload(resolvedRedeemUrl);
+    if (resp) return await extractFileFromResponse(resp);
+
+    resp = await tryOneDriveLegacyApi(resolvedRedeemUrl);
+    if (resp) return await extractFileFromResponse(resp);
+
+    resp = await tryOneDriveLegacyApi(redeemShortUrl);
+    if (resp) return await extractFileFromResponse(resp);
   }
 
   if (url.includes("1drv.ms")) {
