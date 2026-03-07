@@ -1,118 +1,347 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
 import {
-  ResponsiveDialog,
-  ResponsiveDialogContent,
-  ResponsiveDialogDescription,
-  ResponsiveDialogFooter,
-  ResponsiveDialogHeader,
-  ResponsiveDialogTitle,
-  ResponsiveDialogTrigger,
-} from '@/components/ui/responsive-dialog';
-import { Plus, Loader2 } from 'lucide-react';
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Plus, Loader2, Upload, Link2, Cloud, X, FileText, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
+import { useDropzone } from 'react-dropzone';
+import { cn } from '@/lib/utils';
+
+type SourceType = 'upload' | 'google_drive' | 'canva';
+type FeedbackMode = 'immediate' | 'end' | 'none';
+
+interface CourseSettings {
+  ai_auto_score: boolean;
+  show_score_at_end: boolean;
+  feedback_mode: FeedbackMode;
+  ai_grade_open_questions: boolean;
+  free_navigation: boolean;
+  show_question_score: boolean;
+}
+
+const DEFAULT_SETTINGS: CourseSettings = {
+  ai_auto_score: true,
+  show_score_at_end: true,
+  feedback_mode: 'immediate',
+  ai_grade_open_questions: false,
+  free_navigation: true,
+  show_question_score: true,
+};
+
+const ACCEPTED_TYPES: Record<string, string[]> = {
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
+  'application/vnd.ms-powerpoint': ['.ppt'],
+  'application/pdf': ['.pdf'],
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+};
 
 export function CreateCourseDialog() {
   const router = useRouter();
   const { profile } = useAuth();
   const [open, setOpen] = useState(false);
+  const [step, setStep] = useState<1 | 2>(1);
   const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
+  const [sourceType, setSourceType] = useState<SourceType>('upload');
+  const [sourceUrl, setSourceUrl] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [settings, setSettings] = useState<CourseSettings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(false);
 
-  const handleCreate = async () => {
-    if (!title.trim() || !profile?.id) {
-      toast.error('נא למלא את כל השדות');
-      return;
+  const onDrop = useCallback((accepted: File[]) => {
+    if (accepted.length > 0) {
+      const f = accepted[0];
+      setFile(f);
+      if (!title) setTitle(f.name.replace(/\.[^/.]+$/, ''));
     }
+  }, [title]);
 
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: ACCEPTED_TYPES,
+    maxFiles: 1,
+    multiple: false,
+  });
+
+  const canProceedStep1 = () => {
+    if (!title.trim()) return false;
+    if (sourceType === 'upload') return !!file;
+    return sourceUrl.trim().length > 0;
+  };
+
+  const handleClose = () => {
+    setOpen(false);
+    setStep(1);
+    setTitle('');
+    setSourceType('upload');
+    setSourceUrl('');
+    setFile(null);
+    setSettings(DEFAULT_SETTINGS);
+  };
+
+  const handleCreate = async () => {
+    if (!profile?.id) return;
     setLoading(true);
     try {
       const courseData: any = {
-        title,
-        description,
+        title: title.trim(),
         owner_id: profile.id,
         status: 'draft',
+        source_type: sourceType,
+        source_url: sourceType !== 'upload' ? sourceUrl.trim() : null,
+        course_settings: settings,
       };
+      if (profile.school_id) courseData.school_id = profile.school_id;
 
-      if (profile.school_id) {
-        courseData.school_id = profile.school_id;
-      }
-
-      const { data, error } = await (supabase
-        .from('courses') as any)
+      const { data: course, error: courseError } = await (supabase.from('courses') as any)
         .insert(courseData)
         .select()
         .single();
+      if (courseError) throw courseError;
 
-      if (error) throw error;
+      if (sourceType === 'upload' && file) {
+        const ext = file.name.split('.').pop()?.toLowerCase() || 'pdf';
+        const path = `${profile.id}/${course.id}/${Date.now()}.${ext}`;
+        const { error: uploadError } = await supabase.storage
+          .from('course-assets')
+          .upload(path, file, { contentType: file.type });
+        if (uploadError) throw uploadError;
+        await (supabase.from('course_assets') as any).insert({
+          course_id: course.id,
+          file_type: ext,
+          storage_path: path,
+          original_name: file.name,
+          size_bytes: file.size,
+          status: 'uploaded',
+        });
+      }
 
       toast.success('הקורס נוצר בהצלחה!');
-      setOpen(false);
-      setTitle('');
-      setDescription('');
-      router.push(`/course/${data.id}/builder`);
+      handleClose();
+      router.push(`/course/${course.id}/builder`);
     } catch (error: any) {
-      toast.error('שגיאה ביצירת הקורס: ' + error.message);
+      toast.error('שגיאה: ' + error.message);
     } finally {
       setLoading(false);
     }
   };
 
+  const setSetting = <K extends keyof CourseSettings>(key: K, val: CourseSettings[K]) => {
+    setSettings(prev => ({ ...prev, [key]: val }));
+  };
+
   return (
-    <ResponsiveDialog open={open} onOpenChange={setOpen}>
-      <ResponsiveDialogTrigger asChild>
-        <Button size="lg">
-          <Plus className="ml-2 h-5 w-5" />
-          צור קורס חדש
-        </Button>
-      </ResponsiveDialogTrigger>
-      <ResponsiveDialogContent>
-        <ResponsiveDialogHeader>
-          <ResponsiveDialogTitle>צור קורס חדש</ResponsiveDialogTitle>
-          <ResponsiveDialogDescription>הזן את פרטי הקורס. תוכל להעלות קבצים בשלב הבא.</ResponsiveDialogDescription>
-        </ResponsiveDialogHeader>
-        <div className="space-y-4 py-4 px-4">
-          <div className="space-y-2">
-            <Label htmlFor="title">שם הקורס</Label>
-            <Input
-              id="title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="לדוגמה: מבוא למתמטיקה"
-              disabled={loading}
-            />
+    <>
+      <Button
+        size="lg"
+        onClick={() => setOpen(true)}
+        className="gap-2 bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
+      >
+        <Plus className="h-5 w-5" />
+        צור קורס חדש
+      </Button>
+
+      <Dialog open={open} onOpenChange={handleClose}>
+        <DialogContent className="max-w-2xl p-0 overflow-hidden bg-white" dir="rtl">
+          <div className="flex flex-col" style={{ maxHeight: '90vh' }}>
+            <DialogHeader className="px-6 pt-6 pb-4 border-b border-slate-100 shrink-0">
+              <div className="flex items-center justify-between">
+                <DialogTitle className="text-xl font-bold text-slate-900">
+                  {step === 1 ? 'צור קורס חדש' : 'הגדרות תצוגת הקורס'}
+                </DialogTitle>
+                <div className="flex items-center gap-2">
+                  <span className={cn('w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-colors', step === 1 ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-500')}>1</span>
+                  <div className="w-6 h-px bg-slate-200" />
+                  <span className={cn('w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-colors', step === 2 ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-500')}>2</span>
+                </div>
+              </div>
+            </DialogHeader>
+
+            <div className="overflow-y-auto flex-1">
+              {step === 1 ? (
+                <div className="p-6 space-y-6">
+                  <div className="space-y-2">
+                    <Label className="text-sm font-semibold text-slate-700">שם הקורס</Label>
+                    <Input
+                      value={title}
+                      onChange={e => setTitle(e.target.value)}
+                      placeholder="לדוגמה: מבוא לאלגברה – יחידה 3"
+                      className="h-11 text-base"
+                      dir="rtl"
+                    />
+                  </div>
+
+                  <div className="space-y-3">
+                    <Label className="text-sm font-semibold text-slate-700">מקור המצגת</Label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {([
+                        { key: 'upload' as const, label: 'העלאת קובץ', icon: Upload },
+                        { key: 'google_drive' as const, label: 'Google Drive', icon: Cloud },
+                        { key: 'canva' as const, label: 'Canva', icon: Link2 },
+                      ]).map(({ key, label, icon: Icon }) => (
+                        <button
+                          key={key}
+                          onClick={() => setSourceType(key)}
+                          className={cn(
+                            'flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all text-sm font-medium',
+                            sourceType === key
+                              ? 'border-blue-600 bg-blue-50 text-blue-700'
+                              : 'border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+                          )}
+                        >
+                          <Icon className="h-5 w-5" />
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {sourceType === 'upload' ? (
+                    <div className="space-y-3">
+                      {file ? (
+                        <div className="flex items-center gap-3 p-4 bg-blue-50 border border-blue-200 rounded-xl">
+                          <FileText className="h-8 w-8 text-blue-600 shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-slate-800 truncate">{file.name}</p>
+                            <p className="text-xs text-slate-500 mt-0.5">{(file.size / 1024 / 1024).toFixed(1)} MB</p>
+                          </div>
+                          <button onClick={() => setFile(null)} className="text-slate-400 hover:text-slate-600 p-1">
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div
+                          {...getRootProps()}
+                          className={cn(
+                            'border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors',
+                            isDragActive ? 'border-blue-500 bg-blue-50' : 'border-slate-300 hover:border-blue-400 hover:bg-slate-50'
+                          )}
+                        >
+                          <input {...getInputProps()} />
+                          <Upload className="h-10 w-10 text-slate-400 mx-auto mb-3" />
+                          <p className="font-semibold text-slate-700 mb-1">גרור קובץ לכאן או לחץ להעלאה</p>
+                          <p className="text-sm text-slate-500">PDF, PPTX, PPT, DOCX – עד 50MB</p>
+                        </div>
+                      )}
+                      <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                        <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-amber-500" />
+                        <p className="text-xs text-amber-700">
+                          שקופית השער (כותרת היחידה) צריכה להיות <strong>בצבע צהוב</strong> או בתבנית שנבחרה – היא תומר ללשונית ניווט בסרגל.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <Label className="text-sm font-semibold text-slate-700">
+                        {sourceType === 'google_drive' ? 'קישור Google Drive' : 'קישור Canva'}
+                      </Label>
+                      <Input
+                        value={sourceUrl}
+                        onChange={e => setSourceUrl(e.target.value)}
+                        placeholder={sourceType === 'google_drive' ? 'https://drive.google.com/...' : 'https://www.canva.com/...'}
+                        dir="ltr"
+                        className="h-11 text-sm font-mono"
+                      />
+                      <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                        <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-amber-500" />
+                        <p className="text-xs text-amber-700">
+                          שקופית השער (כותרת היחידה) צריכה להיות <strong>בצבע צהוב</strong> או בתבנית שנבחרה – היא תומר ללשונית ניווט בסרגל.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="p-6">
+                  <p className="text-sm text-slate-500 mb-5">הגדר כיצד יתנהג הקורס עבור התלמידים</p>
+                  <div className="divide-y divide-slate-100">
+                    {([
+                      { key: 'ai_auto_score' as const, label: 'חישוב ניקוד אוטומטי ע"י AI', desc: 'ה-AI יחשב ניקוד לפי אחוזים לכל שאלה' },
+                      { key: 'show_score_at_end' as const, label: 'הצג ציון בסוף הקורס', desc: 'התלמיד יראה את הציון הסופי (מצב מבחן)' },
+                      { key: 'ai_grade_open_questions' as const, label: 'AI יבדוק שאלות פתוחות', desc: 'חיווי מילולי וניקוד על שאלות פתוחות' },
+                      { key: 'free_navigation' as const, label: 'ניווט חופשי', desc: 'כבוי = חייב לענות נכון לפני מעבר לעמוד הבא' },
+                      { key: 'show_question_score' as const, label: 'הצג ניקוד לכל שאלה', desc: 'התלמיד יראה כמה נקודות כל שאלה שווה' },
+                    ]).map(({ key, label, desc }) => (
+                      <div key={key} className="flex items-center justify-between py-4">
+                        <div className="flex-1 ml-4">
+                          <p className="text-sm font-semibold text-slate-800">{label}</p>
+                          <p className="text-xs text-slate-500 mt-0.5">{desc}</p>
+                        </div>
+                        <Switch checked={settings[key]} onCheckedChange={val => setSetting(key, val)} />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="pt-5 mt-2 border-t border-slate-100">
+                    <Label className="text-sm font-semibold text-slate-800 mb-3 block">מתי לתת חיווי לתלמיד</Label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {([
+                        { val: 'immediate' as const, label: 'מיד אחרי תשובה' },
+                        { val: 'end' as const, label: 'בסוף הקורס' },
+                        { val: 'none' as const, label: 'ללא חיווי' },
+                      ]).map(({ val, label }) => (
+                        <button
+                          key={val}
+                          onClick={() => setSetting('feedback_mode', val)}
+                          className={cn(
+                            'p-3 rounded-xl border-2 text-xs font-semibold transition-all',
+                            settings.feedback_mode === val
+                              ? 'border-blue-600 bg-blue-50 text-blue-700'
+                              : 'border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+                          )}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-slate-100 flex justify-between gap-3 shrink-0 bg-white">
+              {step === 1 ? (
+                <>
+                  <Button variant="outline" onClick={handleClose} className="flex-1">ביטול</Button>
+                  <Button
+                    onClick={() => setStep(2)}
+                    disabled={!canProceedStep1()}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white gap-2"
+                  >
+                    הגדרות קורס
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button variant="outline" onClick={() => setStep(1)} className="gap-2">
+                    <ChevronRight className="h-4 w-4" />
+                    חזור
+                  </Button>
+                  <Button
+                    onClick={handleCreate}
+                    disabled={loading}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white gap-2"
+                  >
+                    {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+                    {loading ? 'יוצר קורס...' : 'צור קורס'}
+                  </Button>
+                </>
+              )}
+            </div>
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="description">תיאור (אופציונלי)</Label>
-            <Textarea
-              id="description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="תאר בקצרה את תוכן הקורס..."
-              rows={3}
-              disabled={loading}
-            />
-          </div>
-        </div>
-        <ResponsiveDialogFooter className="flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2 gap-2">
-          <Button variant="outline" onClick={() => setOpen(false)} disabled={loading} className="w-full sm:w-auto">
-            ביטול
-          </Button>
-          <Button onClick={handleCreate} disabled={loading} className="w-full sm:w-auto">
-            {loading && <Loader2 className="ml-2 h-4 w-4 animate-spin" />}
-            צור קורס
-          </Button>
-        </ResponsiveDialogFooter>
-      </ResponsiveDialogContent>
-    </ResponsiveDialog>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
