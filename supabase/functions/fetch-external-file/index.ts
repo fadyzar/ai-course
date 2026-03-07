@@ -29,6 +29,42 @@ function encodeOneDriveShareUrl(shareUrl: string): string {
   return "u!" + base64.replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
 
+function extractOneDriveRedeemUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    const redeem = parsed.searchParams.get("redeem");
+    if (redeem) {
+      const decoded = atob(redeem);
+      console.log(`[FETCH-EXTERNAL] Decoded redeem URL: ${decoded}`);
+      return decoded;
+    }
+  } catch {
+  }
+  return null;
+}
+
+function buildOneDriveDownloadUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname === "onedrive.live.com") {
+      const pathParts = parsed.pathname.split("/");
+      const resid = parsed.searchParams.get("resid") || parsed.searchParams.get("id");
+      const authkey = parsed.searchParams.get("authkey") || parsed.searchParams.get("ithint");
+      if (resid) {
+        return `https://onedrive.live.com/download?resid=${resid}&authkey=${authkey || ""}`;
+      }
+      const personalIdx = pathParts.indexOf("personal");
+      if (personalIdx !== -1 && pathParts.length > personalIdx + 2) {
+        const cid = pathParts[personalIdx + 1];
+        const itemId = pathParts[pathParts.length - 1];
+        return `https://onedrive.live.com/download?cid=${cid}&resid=${itemId}&authkey=`;
+      }
+    }
+  } catch {
+  }
+  return null;
+}
+
 async function resolveShortUrl(url: string): Promise<string> {
   try {
     const resp = await fetch(url, {
@@ -147,6 +183,21 @@ async function tryDirectDownload(url: string): Promise<Response | null> {
 async function downloadOneDriveFile(url: string): Promise<{ buffer: ArrayBuffer; contentType: string; filename: string }> {
   let resolvedUrl = url;
 
+  const redeemUrl = extractOneDriveRedeemUrl(url);
+  if (redeemUrl) {
+    console.log(`[FETCH-EXTERNAL] Found redeem URL, trying Graph API with it`);
+    const resp = await tryGraphApiDownload(redeemUrl);
+    if (resp) {
+      const contentType = resp.headers.get("content-type") || "application/octet-stream";
+      const contentDisposition = resp.headers.get("content-disposition") || "";
+      let filename = "onedrive_file";
+      const fnMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+      if (fnMatch) filename = fnMatch[1].replace(/['"]/g, "").trim();
+      const buffer = await resp.arrayBuffer();
+      return { buffer, contentType, filename };
+    }
+  }
+
   if (url.includes("1drv.ms")) {
     console.log(`[FETCH-EXTERNAL] Resolving short URL: ${url}`);
     resolvedUrl = await resolveShortUrl(url);
@@ -164,6 +215,14 @@ async function downloadOneDriveFile(url: string): Promise<{ buffer: ArrayBuffer;
   if (!resp) {
     console.log(`[FETCH-EXTERNAL] Trying legacy OneDrive API`);
     resp = await tryOneDriveLegacyApi(resolvedUrl);
+  }
+
+  if (!resp) {
+    const directDownloadUrl = buildOneDriveDownloadUrl(resolvedUrl);
+    if (directDownloadUrl) {
+      console.log(`[FETCH-EXTERNAL] Trying built direct download URL: ${directDownloadUrl}`);
+      resp = await tryDirectDownload(directDownloadUrl);
+    }
   }
 
   if (!resp) {
