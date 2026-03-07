@@ -24,22 +24,72 @@ function isOneDriveUrl(url: string): boolean {
   return url.includes("onedrive.live.com") || url.includes("1drv.ms") || url.includes("sharepoint.com");
 }
 
+function encodeOneDriveShareUrl(shareUrl: string): string {
+  const base64 = btoa(shareUrl);
+  return "u!" + base64.replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+async function tryOneDriveApiDownload(shareUrl: string): Promise<Response | null> {
+  const urlObj = new URL(shareUrl);
+
+  const redeemParam = urlObj.searchParams.get("redeem");
+  const shortUrl = redeemParam
+    ? (() => {
+        try {
+          return atob(redeemParam.replace(/-/g, "+").replace(/_/g, "/"));
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+
+  const candidates = [shareUrl];
+  if (shortUrl) candidates.unshift(shortUrl);
+
+  for (const candidate of candidates) {
+    try {
+      const encoded = encodeOneDriveShareUrl(candidate);
+      const apiUrl = `https://api.onedrive.com/v1.0/shares/${encoded}/root/content`;
+      console.log(`[FETCH-EXTERNAL] Trying OneDrive API: ${apiUrl}`);
+
+      const resp = await fetch(apiUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "*/*",
+        },
+        redirect: "follow",
+      });
+
+      if (resp.ok) {
+        const ct = resp.headers.get("content-type") || "";
+        if (!ct.includes("text/html")) {
+          return resp;
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 async function downloadOneDriveFile(url: string): Promise<{ buffer: ArrayBuffer; contentType: string; filename: string }> {
-  let downloadUrl = url;
+  let resp: Response | null = null;
 
   if (url.includes("onedrive.live.com") || url.includes("1drv.ms")) {
-    const encoded = btoa(url).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-    downloadUrl = `https://api.onedrive.com/v1.0/shares/u!${encoded}/root/content`;
-    console.log(`[FETCH-EXTERNAL] OneDrive share API URL: ${downloadUrl}`);
+    resp = await tryOneDriveApiDownload(url);
   }
 
-  const resp = await fetch(downloadUrl, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-      "Accept": "*/*",
-    },
-    redirect: "follow",
-  });
+  if (!resp) {
+    console.log(`[FETCH-EXTERNAL] Falling back to direct OneDrive fetch`);
+    resp = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+      },
+      redirect: "follow",
+    });
+  }
 
   if (!resp.ok) {
     throw new Error(`OneDrive החזיר שגיאה ${resp.status}. ודא שהקובץ ציבורי ושהקישור תקין.`);
