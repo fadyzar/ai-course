@@ -326,6 +326,9 @@ Deno.serve(async (req: Request) => {
     const { courseId, url } = await req.json();
     if (!courseId || !url) throw new Error("Missing courseId or url");
 
+    console.log(`[FETCH-EXTERNAL] Raw URL received: ${url}`);
+    console.log(`[FETCH-EXTERNAL] isOneDrive check: ${isOneDriveUrl(url)}`);
+
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     const { data: course } = await supabase
@@ -341,23 +344,25 @@ Deno.serve(async (req: Request) => {
     let contentType: string;
     let baseFilename: string;
 
-    if (isOneDriveUrl(url)) {
+    const normalizedUrl = url.trim();
+
+    if (isOneDriveUrl(normalizedUrl)) {
       console.log(`[FETCH-EXTERNAL] Detected OneDrive URL`);
-      const result = await downloadOneDriveFile(url);
+      const result = await downloadOneDriveFile(normalizedUrl);
       buffer = result.buffer;
       contentType = result.contentType;
       baseFilename = result.filename || "onedrive_file";
     } else {
-      const fileId = extractGoogleDriveId(url);
+      const fileId = extractGoogleDriveId(normalizedUrl);
       if (!fileId) {
         throw new Error("לא ניתן לזהות את סוג הקישור. נתמכים: Google Drive, Google Slides, Google Sheets, OneDrive. ודא שהקישור תקין ושהקובץ ציבורי.");
       }
 
       console.log(`[FETCH-EXTERNAL] Google Drive file ID: ${fileId}`);
 
-      if (isGoogleSheetsUrl(url)) {
+      if (isGoogleSheetsUrl(normalizedUrl)) {
         ({ buffer, contentType } = await downloadGoogleSheetsFile(fileId));
-      } else if (isGoogleSlidesUrl(url)) {
+      } else if (isGoogleSlidesUrl(normalizedUrl)) {
         ({ buffer, contentType } = await downloadGoogleSlidesFile(fileId));
       } else {
         ({ buffer, contentType } = await downloadGoogleDriveFile(fileId));
