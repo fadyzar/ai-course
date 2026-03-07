@@ -20,7 +20,7 @@ import { toast } from 'sonner';
 import { useDropzone } from 'react-dropzone';
 import { cn } from '@/lib/utils';
 
-const CHUNK_SIZE = 6 * 1024 * 1024;
+const CHUNK_SIZE = 6 * 1024 * 1024; // 6MB
 
 async function uploadLargeFile(
   bucket: string,
@@ -33,17 +33,22 @@ async function uploadLargeFile(
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token || supabaseKey;
 
-  const uploadUrl = `${supabaseUrl}/storage/v1/upload/resumable`;
-
-  const createRes = await fetch(uploadUrl, {
+  // שלב 1: יצירת upload session
+  const createRes = await fetch(`${supabaseUrl}/storage/v1/upload/resumable`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
       'apikey': supabaseKey,
-      'Content-Type': 'application/offset+octet-stream',
+      'x-upsert': 'true',
       'Upload-Length': String(file.size),
-      'Upload-Metadata': `bucketName ${btoa(bucket)},objectName ${btoa(path)},contentType ${btoa(file.type || 'application/octet-stream')}`,
+      'Upload-Metadata': [
+        `bucketName ${btoa(bucket)}`,
+        `objectName ${btoa(path)}`,
+        `contentType ${btoa(file.type || 'application/octet-stream')}`,
+        `cacheControl ${btoa('3600')}`,
+      ].join(','),
       'Tus-Resumable': '1.0.0',
+      'Content-Length': '0',
     },
   });
 
@@ -55,11 +60,16 @@ async function uploadLargeFile(
   const location = createRes.headers.get('Location');
   if (!location) throw new Error('לא התקבל Location מהשרת');
 
-  const tusUrl = location.startsWith('http') ? location : `${supabaseUrl}${location}`;
+  const tusUrl = location.startsWith('http')
+    ? location
+    : `${supabaseUrl}${location}`;
 
+  // שלב 2: העלאה בחלקים
   let offset = 0;
   while (offset < file.size) {
-    const chunk = file.slice(offset, offset + CHUNK_SIZE);
+    const end = Math.min(offset + CHUNK_SIZE, file.size);
+    const chunk = file.slice(offset, end);
+
     const patchRes = await fetch(tusUrl, {
       method: 'PATCH',
       headers: {
@@ -78,7 +88,7 @@ async function uploadLargeFile(
       throw new Error(`שגיאה בהעלאה: ${text}`);
     }
 
-    offset += chunk.size;
+    offset = end;
     onProgress(Math.round((offset / file.size) * 100));
   }
 }
