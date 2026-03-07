@@ -10,7 +10,7 @@ const corsHeaders = {
 function extractGoogleDriveId(url: string): string | null {
   const patterns = [
     /\/file\/d\/([a-zA-Z0-9_-]+)/,
-    /id=([a-zA-Z0-9_-]+)/,
+    /[?&]id=([a-zA-Z0-9_-]+)/,
     /\/d\/([a-zA-Z0-9_-]+)/,
   ];
   for (const pattern of patterns) {
@@ -20,23 +20,78 @@ function extractGoogleDriveId(url: string): string | null {
   return null;
 }
 
-function buildDirectDownloadUrl(url: string): { downloadUrl: string; filename: string } {
-  const gdriveDriveId = extractGoogleDriveId(url);
+async function downloadGoogleDriveFile(fileId: string): Promise<{ buffer: ArrayBuffer; contentType: string }> {
+  const downloadUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&authuser=0&confirm=t`;
 
-  if (gdriveDriveId) {
-    return {
-      downloadUrl: `https://drive.google.com/uc?export=download&id=${gdriveDriveId}`,
-      filename: `google_drive_file_${gdriveDriveId}.pdf`,
-    };
+  console.log(`[FETCH-EXTERNAL] Trying drive.usercontent.google.com for id=${fileId}`);
+
+  const resp = await fetch(downloadUrl, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "application/octet-stream,*/*",
+    },
+    redirect: "follow",
+  });
+
+  if (!resp.ok) {
+    throw new Error(`Google Drive החזיר שגיאה ${resp.status}. ודא שהקובץ ציבורי.`);
   }
 
-  const urlObj = new URL(url);
-  const pathParts = urlObj.pathname.split("/").filter(Boolean);
-  const lastPart = pathParts[pathParts.length - 1] || "file";
-  return {
-    downloadUrl: url,
-    filename: lastPart.includes(".") ? lastPart : `${lastPart}.pdf`,
-  };
+  const contentType = resp.headers.get("content-type") || "application/octet-stream";
+
+  if (contentType.includes("text/html")) {
+    const html = await resp.text();
+
+    const confirmMatch = html.match(/confirm=([0-9A-Za-z_\-]+)/);
+    const uuidMatch = html.match(/uuid=([0-9A-Za-z_\-]+)/);
+
+    if (confirmMatch || uuidMatch) {
+      const confirm = confirmMatch ? confirmMatch[1] : "t";
+      const uuid = uuidMatch ? uuidMatch[1] : "";
+
+      let retryUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=${confirm}`;
+      if (uuid) retryUrl += `&uuid=${uuid}`;
+
+      console.log(`[FETCH-EXTERNAL] Got confirmation page, retrying with confirm token`);
+
+      const retryResp = await fetch(retryUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "application/octet-stream,*/*",
+        },
+        redirect: "follow",
+      });
+
+      if (!retryResp.ok) {
+        throw new Error(`שגיאה בהורדה לאחר אישור: ${retryResp.status}`);
+      }
+
+      const retryType = retryResp.headers.get("content-type") || "application/octet-stream";
+      if (retryType.includes("text/html")) {
+        throw new Error("Google Drive דורש כניסה לחשבון. יש להפוך את הקובץ לציבורי (כל מי שיש לו קישור).");
+      }
+
+      const buffer = await retryResp.arrayBuffer();
+      return { buffer, contentType: retryType };
+    }
+
+    if (html.includes("accounts.google.com") || html.includes("Sign in")) {
+      throw new Error("Google Drive דורש כניסה לחשבון. יש להפוך את הקובץ לציבורי (כל מי שיש לו קישור יכול להציג).");
+    }
+
+    throw new Error("Google Drive החזיר עמוד HTML במקום קובץ. ודא שהגדרת שיתוף ל'כל מי שיש לו קישור'.");
+  }
+
+  const buffer = await resp.arrayBuffer();
+  return { buffer, contentType };
+}
+
+function getExtFromContentType(contentType: string, filename: string): string {
+  if (contentType.includes("presentationml") || contentType.includes("powerpoint")) return "pptx";
+  if (contentType.includes("pdf")) return "pdf";
+  if (contentType.includes("wordprocessingml") || contentType.includes("msword")) return "docx";
+  if (filename.includes(".")) return filename.split(".").pop()!.toLowerCase();
+  return "pdf";
 }
 
 Deno.serve(async (req: Request) => {
@@ -74,42 +129,37 @@ Deno.serve(async (req: Request) => {
     if (!course) throw new Error("Course not found");
     if (course.owner_id !== user.id) throw new Error("Unauthorized");
 
-    const { downloadUrl, filename } = buildDirectDownloadUrl(url);
-
-    console.log(`[FETCH-EXTERNAL] Downloading from: ${downloadUrl}`);
-
-    const fileResp = await fetch(downloadUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; Slide2Course/1.0)",
-      },
-      redirect: "follow",
-    });
-
-    if (!fileResp.ok) {
-      throw new Error(`לא ניתן להוריד את הקובץ (${fileResp.status}). ודא שהקובץ ציבורי.`);
+    const fileId = extractGoogleDriveId(url);
+    if (!fileId) {
+      throw new Error("לא ניתן לזהות מזהה קובץ ב-Google Drive. ודא שהקישור תקין.");
     }
 
-    const contentType = fileResp.headers.get("content-type") || "application/octet-stream";
-    const buffer = await fileResp.arrayBuffer();
+    console.log(`[FETCH-EXTERNAL] Google Drive file ID: ${fileId}`);
+
+    const { buffer, contentType } = await downloadGoogleDriveFile(fileId);
 
     if (buffer.byteLength === 0) {
-      throw new Error("הקובץ שהורד ריק. ודא שהקישור נכון ושהקובץ ציבורי.");
+      throw new Error("הקובץ שהורד ריק.");
     }
 
     console.log(`[FETCH-EXTERNAL] Downloaded ${buffer.byteLength} bytes, content-type: ${contentType}`);
 
-    let ext = "pdf";
-    if (contentType.includes("presentation") || filename.endsWith(".pptx")) ext = "pptx";
-    else if (contentType.includes("pdf") || filename.endsWith(".pdf")) ext = "pdf";
-    else if (contentType.includes("wordprocessing") || filename.endsWith(".docx")) ext = "docx";
-    else if (filename.includes(".")) ext = filename.split(".").pop()!;
+    const filename = `google_drive_${fileId}`;
+    const ext = getExtFromContentType(contentType, filename);
+    const finalFilename = `${filename}.${ext}`;
 
-    const sanitizedName = filename.replace(/[^a-zA-Z0-9.\-_]/g, "_");
-    const storagePath = `${courseId}/${Date.now()}_${sanitizedName}`;
+    const mimeMap: Record<string, string> = {
+      pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      pdf: "application/pdf",
+      docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    };
+    const uploadContentType = mimeMap[ext] || contentType;
+
+    const storagePath = `${courseId}/${Date.now()}_${finalFilename}`;
 
     const { error: uploadError } = await supabase.storage
       .from("course-assets")
-      .upload(storagePath, buffer, { contentType });
+      .upload(storagePath, buffer, { contentType: uploadContentType });
 
     if (uploadError) throw new Error("שגיאה בשמירת הקובץ: " + uploadError.message);
 
@@ -119,7 +169,7 @@ Deno.serve(async (req: Request) => {
         course_id: courseId,
         file_type: ext,
         storage_path: storagePath,
-        original_name: filename,
+        original_name: finalFilename,
         size_bytes: buffer.byteLength,
         status: "uploaded",
       });
@@ -127,7 +177,7 @@ Deno.serve(async (req: Request) => {
     if (assetError) throw new Error("שגיאה בשמירת נתוני הקובץ: " + assetError.message);
 
     return new Response(
-      JSON.stringify({ success: true, storagePath, filename, size: buffer.byteLength }),
+      JSON.stringify({ success: true, storagePath, filename: finalFilename, size: buffer.byteLength }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error: any) {
