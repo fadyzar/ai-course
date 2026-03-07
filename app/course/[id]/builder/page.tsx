@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { ArrowLeft, Settings, Info, Eye, Download, Loader as Loader2, Presentation } from 'lucide-react';
+import { ArrowLeft, Settings, Info, Eye, Download, Loader as Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 
@@ -329,21 +329,6 @@ export default function CourseBuilderPage() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            {assets.length > 0 && (
-              <Button
-                onClick={handleDownloadOriginal}
-                variant="outline"
-                disabled={isDownloading}
-                className="flex-1 md:flex-none"
-              >
-                {isDownloading ? (
-                  <Loader2 className="h-4 w-4 ml-2 animate-spin" />
-                ) : (
-                  <Presentation className="h-4 w-4 ml-2" />
-                )}
-                המר למצגת
-              </Button>
-            )}
             {course.status === 'ready' && (
               <>
                 <Button asChild variant="default" size="lg" className="flex-1 md:flex-none">
@@ -367,14 +352,16 @@ export default function CourseBuilderPage() {
                 </Button>
               </>
             )}
-            <Button onClick={handleStartProcessing} variant="outline" disabled={isProcessing} className="flex-1 md:flex-none">
-              {isProcessing ? (
-                <Loader2 className="h-4 w-4 ml-2 animate-spin" />
-              ) : (
-                <Settings className="h-4 w-4 ml-2" />
-              )}
-              {isProcessing ? 'מעבד...' : 'עבד מחדש'}
-            </Button>
+            {assets.length > 0 && (
+              <Button onClick={handleStartProcessing} disabled={isProcessing} className="flex-1 md:flex-none bg-blue-600 hover:bg-blue-700 text-white">
+                {isProcessing ? (
+                  <Loader2 className="h-4 w-4 ml-2 animate-spin" />
+                ) : (
+                  <Settings className="h-4 w-4 ml-2" />
+                )}
+                {isProcessing ? 'מעבד...' : 'המר לקורס'}
+              </Button>
+            )}
           </div>
         </div>
 
@@ -415,9 +402,8 @@ export default function CourseBuilderPage() {
                   hasAssets={assets.length > 0}
                   onUploadComplete={() => {
                     loadAssets();
-                    toast.success('הקובץ הועלה בהצלחה! כעת תוכל להמיר למצגת.');
+                    toast.success('הקובץ הועלה בהצלחה! לחץ "המר לקורס" כדי להתחיל בעיבוד.');
                   }}
-                  onStartProcessing={handleDownloadOriginal}
                 />
               </TabsContent>
               <TabsContent value="files">
