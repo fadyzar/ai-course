@@ -29,14 +29,112 @@ function encodeOneDriveShareUrl(shareUrl: string): string {
   return "u!" + base64.replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
 
-async function tryFetchDirect(url: string): Promise<Response | null> {
-  const headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/octet-stream,application/vnd.openxmlformats-officedocument.presentationml.presentation,*/*",
-  };
+async function resolveShortUrl(url: string): Promise<string> {
+  try {
+    const resp = await fetch(url, {
+      method: "HEAD",
+      redirect: "follow",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+      },
+    });
+    return resp.url || url;
+  } catch {
+    return url;
+  }
+}
+
+async function tryGraphApiDownload(shareUrl: string): Promise<Response | null> {
+  const encoded = encodeOneDriveShareUrl(shareUrl);
+
+  const metaUrl = `https://graph.microsoft.com/v1.0/shares/${encoded}/driveItem`;
+  console.log(`[FETCH-EXTERNAL] Trying Graph API meta: ${metaUrl}`);
 
   try {
-    const resp = await fetch(url, { headers, redirect: "follow" });
+    const metaResp = await fetch(metaUrl, {
+      headers: {
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+      },
+    });
+
+    if (metaResp.ok) {
+      const meta = await metaResp.json();
+      const downloadUrl = meta["@microsoft.graph.downloadUrl"];
+      if (downloadUrl) {
+        console.log(`[FETCH-EXTERNAL] Got downloadUrl from Graph API metadata`);
+        const fileResp = await fetch(downloadUrl, { redirect: "follow" });
+        if (fileResp.ok) {
+          const ct = fileResp.headers.get("content-type") || "";
+          if (!ct.includes("text/html")) return fileResp;
+        }
+      }
+    } else {
+      console.log(`[FETCH-EXTERNAL] Graph API meta returned ${metaResp.status}`);
+    }
+  } catch (e) {
+    console.log(`[FETCH-EXTERNAL] Graph API meta failed: ${e}`);
+  }
+
+  const contentUrl = `https://graph.microsoft.com/v1.0/shares/${encoded}/root/content`;
+  console.log(`[FETCH-EXTERNAL] Trying Graph API content: ${contentUrl}`);
+
+  try {
+    const contentResp = await fetch(contentUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+      },
+      redirect: "follow",
+    });
+
+    if (contentResp.ok) {
+      const ct = contentResp.headers.get("content-type") || "";
+      if (!ct.includes("text/html")) {
+        console.log(`[FETCH-EXTERNAL] Graph API content succeeded`);
+        return contentResp;
+      }
+    }
+  } catch (e) {
+    console.log(`[FETCH-EXTERNAL] Graph API content failed: ${e}`);
+  }
+
+  return null;
+}
+
+async function tryOneDriveLegacyApi(shareUrl: string): Promise<Response | null> {
+  const encoded = encodeOneDriveShareUrl(shareUrl);
+  const apiUrl = `https://api.onedrive.com/v1.0/shares/${encoded}/root/content`;
+  console.log(`[FETCH-EXTERNAL] Trying legacy OneDrive API: ${apiUrl}`);
+
+  try {
+    const resp = await fetch(apiUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+      },
+      redirect: "follow",
+    });
+
+    if (resp.ok) {
+      const ct = resp.headers.get("content-type") || "";
+      if (!ct.includes("text/html")) return resp;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+async function tryDirectDownload(url: string): Promise<Response | null> {
+  try {
+    const resp = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/octet-stream,*/*",
+      },
+      redirect: "follow",
+    });
     if (!resp.ok) return null;
     const ct = resp.headers.get("content-type") || "";
     if (ct.includes("text/html")) return null;
@@ -46,104 +144,38 @@ async function tryFetchDirect(url: string): Promise<Response | null> {
   }
 }
 
-async function tryOneDriveApiDownload(shareUrl: string): Promise<Response | null> {
-  const candidates: string[] = [shareUrl];
-
-  try {
-    const urlObj = new URL(shareUrl);
-    const redeemParam = urlObj.searchParams.get("redeem");
-    if (redeemParam) {
-      try {
-        const decoded = atob(redeemParam.replace(/-/g, "+").replace(/_/g, "/"));
-        if (decoded.startsWith("http")) candidates.unshift(decoded);
-      } catch { /* ignore */ }
-    }
-
-    const withDownload = new URL(shareUrl);
-    withDownload.searchParams.set("download", "1");
-    candidates.push(withDownload.toString());
-  } catch { /* ignore */ }
-
-  for (const candidate of candidates) {
-    try {
-      const encoded = encodeOneDriveShareUrl(candidate);
-      const apiUrl = `https://api.onedrive.com/v1.0/shares/${encoded}/root/content`;
-      console.log(`[FETCH-EXTERNAL] Trying OneDrive API: ${apiUrl}`);
-
-      const resp = await fetch(apiUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-          "Accept": "*/*",
-        },
-        redirect: "follow",
-      });
-
-      if (resp.ok) {
-        const ct = resp.headers.get("content-type") || "";
-        if (!ct.includes("text/html")) {
-          console.log(`[FETCH-EXTERNAL] OneDrive API succeeded for candidate`);
-          return resp;
-        }
-      }
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
 async function downloadOneDriveFile(url: string): Promise<{ buffer: ArrayBuffer; contentType: string; filename: string }> {
-  let resp: Response | null = null;
+  let resolvedUrl = url;
 
-  console.log(`[FETCH-EXTERNAL] Trying direct download first`);
-  resp = await tryFetchDirect(url);
+  if (url.includes("1drv.ms")) {
+    console.log(`[FETCH-EXTERNAL] Resolving short URL: ${url}`);
+    resolvedUrl = await resolveShortUrl(url);
+    console.log(`[FETCH-EXTERNAL] Resolved to: ${resolvedUrl}`);
+  }
 
-  if (!resp && (url.includes("onedrive.live.com") || url.includes("1drv.ms"))) {
-    console.log(`[FETCH-EXTERNAL] Trying OneDrive share API`);
-    resp = await tryOneDriveApiDownload(url);
+  console.log(`[FETCH-EXTERNAL] Trying Graph API first`);
+  let resp = await tryGraphApiDownload(resolvedUrl);
+
+  if (!resp && resolvedUrl !== url) {
+    console.log(`[FETCH-EXTERNAL] Trying Graph API with original short URL`);
+    resp = await tryGraphApiDownload(url);
   }
 
   if (!resp) {
-    console.log(`[FETCH-EXTERNAL] Trying direct fetch with follow redirects`);
-    resp = await fetch(url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-      },
-      redirect: "follow",
-    });
+    console.log(`[FETCH-EXTERNAL] Trying legacy OneDrive API`);
+    resp = await tryOneDriveLegacyApi(resolvedUrl);
   }
 
-  if (!resp.ok) {
-    throw new Error(`OneDrive החזיר שגיאה ${resp.status}. ודא שהקובץ ציבורי ושהקישור תקין.`);
+  if (!resp) {
+    console.log(`[FETCH-EXTERNAL] Trying direct download`);
+    resp = await tryDirectDownload(resolvedUrl);
+  }
+
+  if (!resp) {
+    throw new Error("לא ניתן להוריד את הקובץ מ-OneDrive. ודא שהקובץ משותף כ'כל מי שיש לו קישור יכול להציג' ושהקישור תקין.");
   }
 
   const contentType = resp.headers.get("content-type") || "application/octet-stream";
-
-  if (contentType.includes("text/html")) {
-    const html = await resp.text();
-    if (html.includes("login.microsoftonline") || html.includes("login.live") || html.includes("Sign in") || html.includes("signin")) {
-      throw new Error("OneDrive דורש כניסה לחשבון. יש להפוך את הקובץ לציבורי (כל מי שיש לו קישור יכול להציג).");
-    }
-    const downloadLinkMatch = html.match(/"downloadUrl"\s*:\s*"([^"]+)"/);
-    if (downloadLinkMatch) {
-      console.log(`[FETCH-EXTERNAL] Found download URL in HTML response`);
-      const directResp = await fetch(downloadLinkMatch[1], { redirect: "follow" });
-      if (directResp.ok) {
-        const directCt = directResp.headers.get("content-type") || "application/octet-stream";
-        if (!directCt.includes("text/html")) {
-          const buffer = await directResp.arrayBuffer();
-          const contentDisposition = directResp.headers.get("content-disposition") || "";
-          let filename = "onedrive_file";
-          const fnMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
-          if (fnMatch) filename = fnMatch[1].replace(/['"]/g, "").trim();
-          return { buffer, contentType: directCt, filename };
-        }
-      }
-    }
-    throw new Error("OneDrive החזיר עמוד HTML במקום קובץ. ודא שהקובץ ציבורי.");
-  }
-
   const contentDisposition = resp.headers.get("content-disposition") || "";
   let filename = "onedrive_file";
   const fnMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
