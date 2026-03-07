@@ -14,7 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Plus, Loader2, Upload, Link2, Cloud, X, FileText, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Loader as Loader2, Upload, Link2, Cloud, X, FileText, CircleAlert as AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 import { useDropzone } from 'react-dropzone';
 import { cn } from '@/lib/utils';
