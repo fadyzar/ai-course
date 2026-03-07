@@ -20,6 +20,52 @@ function extractGoogleDriveId(url: string): string | null {
   return null;
 }
 
+function isOneDriveUrl(url: string): boolean {
+  return url.includes("onedrive.live.com") || url.includes("1drv.ms") || url.includes("sharepoint.com");
+}
+
+async function downloadOneDriveFile(url: string): Promise<{ buffer: ArrayBuffer; contentType: string; filename: string }> {
+  let downloadUrl = url;
+
+  if (url.includes("onedrive.live.com") || url.includes("1drv.ms")) {
+    const encoded = btoa(url).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+    downloadUrl = `https://api.onedrive.com/v1.0/shares/u!${encoded}/root/content`;
+    console.log(`[FETCH-EXTERNAL] OneDrive share API URL: ${downloadUrl}`);
+  }
+
+  const resp = await fetch(downloadUrl, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "*/*",
+    },
+    redirect: "follow",
+  });
+
+  if (!resp.ok) {
+    throw new Error(`OneDrive החזיר שגיאה ${resp.status}. ודא שהקובץ ציבורי ושהקישור תקין.`);
+  }
+
+  const contentType = resp.headers.get("content-type") || "application/octet-stream";
+
+  if (contentType.includes("text/html")) {
+    const html = await resp.text();
+    if (html.includes("login") || html.includes("signin") || html.includes("Sign in")) {
+      throw new Error("OneDrive דורש כניסה לחשבון. יש להפוך את הקובץ לציבורי (כל מי שיש לו קישור יכול להציג).");
+    }
+    throw new Error("OneDrive החזיר עמוד HTML במקום קובץ. ודא שהקובץ ציבורי.");
+  }
+
+  const contentDisposition = resp.headers.get("content-disposition") || "";
+  let filename = "onedrive_file";
+  const fnMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+  if (fnMatch) {
+    filename = fnMatch[1].replace(/['"]/g, "").trim();
+  }
+
+  const buffer = await resp.arrayBuffer();
+  return { buffer, contentType, filename };
+}
+
 function isGoogleSheetsUrl(url: string): boolean {
   return url.includes("/spreadsheets/d/");
 }
@@ -202,22 +248,32 @@ Deno.serve(async (req: Request) => {
     if (!course) throw new Error("Course not found");
     if (course.owner_id !== user.id) throw new Error("Unauthorized");
 
-    const fileId = extractGoogleDriveId(url);
-    if (!fileId) {
-      throw new Error("לא ניתן לזהות מזהה קובץ ב-Google Drive. ודא שהקישור תקין.");
-    }
-
-    console.log(`[FETCH-EXTERNAL] Google Drive file ID: ${fileId}`);
-
     let buffer: ArrayBuffer;
     let contentType: string;
+    let baseFilename: string;
 
-    if (isGoogleSheetsUrl(url)) {
-      ({ buffer, contentType } = await downloadGoogleSheetsFile(fileId));
-    } else if (isGoogleSlidesUrl(url)) {
-      ({ buffer, contentType } = await downloadGoogleSlidesFile(fileId));
+    if (isOneDriveUrl(url)) {
+      console.log(`[FETCH-EXTERNAL] Detected OneDrive URL`);
+      const result = await downloadOneDriveFile(url);
+      buffer = result.buffer;
+      contentType = result.contentType;
+      baseFilename = result.filename || "onedrive_file";
     } else {
-      ({ buffer, contentType } = await downloadGoogleDriveFile(fileId));
+      const fileId = extractGoogleDriveId(url);
+      if (!fileId) {
+        throw new Error("לא ניתן לזהות את סוג הקישור. נתמכים: Google Drive, Google Slides, Google Sheets, OneDrive. ודא שהקישור תקין ושהקובץ ציבורי.");
+      }
+
+      console.log(`[FETCH-EXTERNAL] Google Drive file ID: ${fileId}`);
+
+      if (isGoogleSheetsUrl(url)) {
+        ({ buffer, contentType } = await downloadGoogleSheetsFile(fileId));
+      } else if (isGoogleSlidesUrl(url)) {
+        ({ buffer, contentType } = await downloadGoogleSlidesFile(fileId));
+      } else {
+        ({ buffer, contentType } = await downloadGoogleDriveFile(fileId));
+      }
+      baseFilename = `google_drive_${fileId}`;
     }
 
     if (buffer.byteLength === 0) {
@@ -226,9 +282,8 @@ Deno.serve(async (req: Request) => {
 
     console.log(`[FETCH-EXTERNAL] Downloaded ${buffer.byteLength} bytes, content-type: ${contentType}`);
 
-    const filename = `google_drive_${fileId}`;
-    const ext = getExtFromContentType(contentType, filename);
-    const finalFilename = `${filename}.${ext}`;
+    const ext = getExtFromContentType(contentType, baseFilename);
+    const finalFilename = baseFilename.includes(".") ? baseFilename : `${baseFilename}.${ext}`;
 
     const mimeMap: Record<string, string> = {
       pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
