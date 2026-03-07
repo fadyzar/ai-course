@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { ArrowLeft, Settings, Info, Eye, Download, Loader as Loader2, PlusCircle } from 'lucide-react';
+import { ArrowLeft, Settings, Info, Eye, Download, Loader as Loader2, CirclePlus as PlusCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { ManualQuestionDialog } from '@/components/course/ManualQuestionDialog';
