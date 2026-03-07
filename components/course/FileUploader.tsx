@@ -104,13 +104,13 @@ export function FileUploader({ courseId, onUploadComplete, onStartProcessing, ha
     onDrop,
     accept: ACCEPTED_TYPES,
     disabled: uploading,
-    maxSize: 100 * 1024 * 1024,
+    maxSize: 500 * 1024 * 1024,
     onDropRejected: (rejections) => {
       rejections.forEach((rejection) => {
         const { file, errors } = rejection;
         errors.forEach((error) => {
           if (error.code === 'file-too-large') {
-            toast.error(`${file.name}: הקובץ גדול מדי (מקסימום 100MB)`);
+            toast.error(`${file.name}: הקובץ גדול מדי (מקסימום 500MB)`);
           } else if (error.code === 'file-invalid-type') {
             toast.error(`${file.name}: סוג קובץ לא נתמך`);
           } else {
@@ -157,7 +157,7 @@ export function FileUploader({ courseId, onUploadComplete, onStartProcessing, ha
                   תמיכה ב: PPT/PPTX, PDF, DOC/DOCX, תמונות (PNG, JPG, GIF, SVG), וידאו (MP4, MOV, AVI), אודיו (MP3, WAV), ארכיבים (ZIP, RAR, 7Z)
                 </p>
                 <p className="text-xs text-slate-400 mt-1">
-                  מקסימום 100MB לקובץ
+                  מקסימום 500MB לקובץ
                 </p>
               </div>
             </>
