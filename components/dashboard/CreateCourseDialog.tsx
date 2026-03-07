@@ -110,6 +110,8 @@ export function CreateCourseDialog() {
         .single();
       if (courseError) throw courseError;
 
+      let assetStoragePath: string | null = null;
+
       if (sourceType === 'upload' && file) {
         const ext = file.name.split('.').pop()?.toLowerCase() || 'pdf';
         const path = `${profile.id}/${course.id}/${Date.now()}.${ext}`;
@@ -117,7 +119,8 @@ export function CreateCourseDialog() {
           .from('course-assets')
           .upload(path, file, { contentType: file.type });
         if (uploadError) throw uploadError;
-        await (supabase.from('course_assets') as any).insert({
+
+        const { error: assetError } = await (supabase.from('course_assets') as any).insert({
           course_id: course.id,
           file_type: ext,
           storage_path: path,
@@ -125,11 +128,18 @@ export function CreateCourseDialog() {
           size_bytes: file.size,
           status: 'uploaded',
         });
+        if (assetError) throw assetError;
+
+        assetStoragePath = path;
       }
 
-      toast.success('הקורס נוצר בהצלחה!');
       handleClose();
-      router.push(`/course/${course.id}/builder`);
+
+      if (assetStoragePath) {
+        router.push(`/course/${course.id}/builder?autoConvert=1`);
+      } else {
+        router.push(`/course/${course.id}/builder`);
+      }
     } catch (error: any) {
       toast.error('שגיאה: ' + error.message);
     } finally {

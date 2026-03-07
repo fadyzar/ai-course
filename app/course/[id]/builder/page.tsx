@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
@@ -24,6 +24,7 @@ type Asset = Database['public']['Tables']['course_assets']['Row'];
 export default function CourseBuilderPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { profile } = useAuth();
   const courseId = params.id as string;
 
@@ -33,6 +34,7 @@ export default function CourseBuilderPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [autoConvertTriggered, setAutoConvertTriggered] = useState(false);
 
   useEffect(() => {
     if (courseId) {
@@ -46,6 +48,15 @@ export default function CourseBuilderPage() {
       setIsProcessing(course.status === 'processing');
     }
   }, [course]);
+
+  useEffect(() => {
+    const shouldAutoConvert = searchParams.get('autoConvert') === '1';
+    if (shouldAutoConvert && !autoConvertTriggered && assets.length > 0 && !loading) {
+      setAutoConvertTriggered(true);
+      router.replace(`/course/${courseId}/builder`);
+      handleDownloadOriginal();
+    }
+  }, [searchParams, assets, loading, autoConvertTriggered]);
 
   useEffect(() => {
     if (!courseId) return;
