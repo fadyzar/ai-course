@@ -402,8 +402,9 @@ export default function CourseBuilderPage() {
                   hasAssets={assets.length > 0}
                   onUploadComplete={() => {
                     loadAssets();
-                    toast.success('הקובץ הועלה בהצלחה! לחץ "המר לקורס" כדי להתחיל בעיבוד.');
+                    toast.success('הקובץ הועלה בהצלחה!');
                   }}
+                  onStartProcessing={handleDownloadOriginal}
                 />
               </TabsContent>
               <TabsContent value="files">
