@@ -14,9 +14,10 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { ArrowLeft, Settings, Info, Eye, Download, Loader as Loader2 } from 'lucide-react';
+import { ArrowLeft, Settings, Info, Eye, Download, Loader as Loader2, PlusCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
+import { ManualQuestionDialog } from '@/components/course/ManualQuestionDialog';
 
 type Course = Database['public']['Tables']['courses']['Row'];
 type Asset = Database['public']['Tables']['course_assets']['Row'];
@@ -35,6 +36,7 @@ export default function CourseBuilderPage() {
   const [isExporting, setIsExporting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [autoConvertTriggered, setAutoConvertTriggered] = useState(false);
+  const [manualQuestionOpen, setManualQuestionOpen] = useState(false);
 
   useEffect(() => {
     if (courseId) {
@@ -363,6 +365,14 @@ export default function CourseBuilderPage() {
                 </Button>
               </>
             )}
+            <Button
+              onClick={() => setManualQuestionOpen(true)}
+              variant="outline"
+              className="flex-1 md:flex-none border-green-300 text-green-700 hover:bg-green-50 hover:border-green-400"
+            >
+              <PlusCircle className="h-4 w-4 ml-2" />
+              הוסף שאלה ידנית
+            </Button>
             {assets.length > 0 && (
               <Button onClick={handleStartProcessing} disabled={isProcessing} className="flex-1 md:flex-none bg-blue-600 hover:bg-blue-700 text-white">
                 {isProcessing ? (
@@ -449,6 +459,14 @@ export default function CourseBuilderPage() {
           </div>
         </div>
       </div>
+      <ManualQuestionDialog
+        courseId={courseId}
+        open={manualQuestionOpen}
+        onOpenChange={setManualQuestionOpen}
+        onQuestionAdded={() => {
+          toast.success('השאלה נוספה לקורס!');
+        }}
+      />
     </DashboardLayout>
   );
 }
