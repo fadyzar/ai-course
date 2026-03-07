@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { DashboardLayout } from '@/components/layout/DashboardLayout';
@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { ArrowLeft, Settings, Info, Eye, Download, Loader as Loader2, Presentation } from 'lucide-react';
+import { ArrowLeft, Settings, Info, Eye, Download, Loader as Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 
@@ -24,6 +24,7 @@ type Asset = Database['public']['Tables']['course_assets']['Row'];
 export default function CourseBuilderPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { profile } = useAuth();
   const courseId = params.id as string;
 
@@ -33,6 +34,7 @@ export default function CourseBuilderPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [autoConvertTriggered, setAutoConvertTriggered] = useState(false);
 
   useEffect(() => {
     if (courseId) {
@@ -46,6 +48,15 @@ export default function CourseBuilderPage() {
       setIsProcessing(course.status === 'processing');
     }
   }, [course]);
+
+  useEffect(() => {
+    const shouldAutoConvert = searchParams.get('autoConvert') === '1';
+    if (shouldAutoConvert && !autoConvertTriggered && assets.length > 0 && !loading) {
+      setAutoConvertTriggered(true);
+      router.replace(`/course/${courseId}/builder`);
+      handleDownloadOriginal();
+    }
+  }, [searchParams, assets, loading, autoConvertTriggered]);
 
   useEffect(() => {
     if (!courseId) return;
@@ -329,21 +340,6 @@ export default function CourseBuilderPage() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            {assets.length > 0 && (
-              <Button
-                onClick={handleDownloadOriginal}
-                variant="outline"
-                disabled={isDownloading}
-                className="flex-1 md:flex-none"
-              >
-                {isDownloading ? (
-                  <Loader2 className="h-4 w-4 ml-2 animate-spin" />
-                ) : (
-                  <Presentation className="h-4 w-4 ml-2" />
-                )}
-                המר למצגת
-              </Button>
-            )}
             {course.status === 'ready' && (
               <>
                 <Button asChild variant="default" size="lg" className="flex-1 md:flex-none">
@@ -367,14 +363,16 @@ export default function CourseBuilderPage() {
                 </Button>
               </>
             )}
-            <Button onClick={handleStartProcessing} variant="outline" disabled={isProcessing} className="flex-1 md:flex-none">
-              {isProcessing ? (
-                <Loader2 className="h-4 w-4 ml-2 animate-spin" />
-              ) : (
-                <Settings className="h-4 w-4 ml-2" />
-              )}
-              {isProcessing ? 'מעבד...' : 'עבד מחדש'}
-            </Button>
+            {assets.length > 0 && (
+              <Button onClick={handleStartProcessing} disabled={isProcessing} className="flex-1 md:flex-none bg-blue-600 hover:bg-blue-700 text-white">
+                {isProcessing ? (
+                  <Loader2 className="h-4 w-4 ml-2 animate-spin" />
+                ) : (
+                  <Settings className="h-4 w-4 ml-2" />
+                )}
+                {isProcessing ? 'מעבד...' : 'המר לקורס'}
+              </Button>
+            )}
           </div>
         </div>
 
@@ -415,7 +413,7 @@ export default function CourseBuilderPage() {
                   hasAssets={assets.length > 0}
                   onUploadComplete={() => {
                     loadAssets();
-                    toast.success('הקובץ הועלה בהצלחה! כעת תוכל להמיר למצגת.');
+                    toast.success('הקובץ הועלה בהצלחה!');
                   }}
                   onStartProcessing={handleDownloadOriginal}
                 />
