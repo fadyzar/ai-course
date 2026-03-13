@@ -5,6 +5,7 @@ export type QuestionType = 'single_choice' | 'multiple_choice' | 'true_false';
 export type JobStatus = 'queued' | 'processing' | 'completed' | 'failed';
 export type LogLevel = 'debug' | 'info' | 'warning' | 'error';
 export type IntegrationStatus = 'connected' | 'disconnected' | 'error';
+export type PageType = 'text' | 'pdf' | 'pptx_slide' | 'video' | 'quiz';
 
 export interface Database {
   public: {
@@ -159,6 +160,7 @@ export interface Database {
           title: string;
           order_index: number;
           source_slide_id: string | null;
+          asset_id: string | null;
           metadata: Record<string, any>;
           created_at: string;
         };
@@ -168,6 +170,7 @@ export interface Database {
           title: string;
           order_index?: number;
           source_slide_id?: string | null;
+          asset_id?: string | null;
           metadata?: Record<string, any>;
           created_at?: string;
         };
@@ -177,6 +180,7 @@ export interface Database {
           title?: string;
           order_index?: number;
           source_slide_id?: string | null;
+          asset_id?: string | null;
           metadata?: Record<string, any>;
           created_at?: string;
         };
@@ -187,7 +191,13 @@ export interface Database {
           course_id: string;
           section_id: string | null;
           order_index: number;
+          page_type: PageType;
+          title: string | null;
           html_content: string;
+          asset_id: string | null;
+          video_storage_path: string | null;
+          pdf_page_num: number | null;
+          slide_index: number | null;
           source_refs: Record<string, any>;
           created_at: string;
         };
@@ -196,7 +206,13 @@ export interface Database {
           course_id: string;
           section_id?: string | null;
           order_index?: number;
+          page_type?: PageType;
+          title?: string | null;
           html_content?: string;
+          asset_id?: string | null;
+          video_storage_path?: string | null;
+          pdf_page_num?: number | null;
+          slide_index?: number | null;
           source_refs?: Record<string, any>;
           created_at?: string;
         };
@@ -205,7 +221,13 @@ export interface Database {
           course_id?: string;
           section_id?: string | null;
           order_index?: number;
+          page_type?: PageType;
+          title?: string | null;
           html_content?: string;
+          asset_id?: string | null;
+          video_storage_path?: string | null;
+          pdf_page_num?: number | null;
+          slide_index?: number | null;
           source_refs?: Record<string, any>;
           created_at?: string;
         };
