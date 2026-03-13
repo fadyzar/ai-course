@@ -7,6 +7,16 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
+const VIDEO_EXTENSIONS = ["mp4", "mov", "webm", "avi", "mkv", "m4v", "mpeg", "mpg", "ogv", "3gp"];
+const VIDEO_MIME_TYPES = ["video/mp4", "video/quicktime", "video/webm", "video/x-msvideo", "video/x-matroska", "video/mpeg", "video/ogg", "video/3gpp"];
+
+function isVideoAsset(asset: { file_type?: string; original_name?: string }): boolean {
+  const fileType = asset.file_type?.toLowerCase() || "";
+  if (VIDEO_MIME_TYPES.includes(fileType)) return true;
+  const ext = (asset.original_name || "").split(".").pop()?.toLowerCase() || "";
+  return VIDEO_EXTENSIONS.includes(fileType) || VIDEO_EXTENSIONS.includes(ext);
+}
+
 function escapeHtml(str: string): string {
   return str
     .replace(/&/g, "&amp;")
@@ -163,22 +173,42 @@ async function extractPptx(buffer: ArrayBuffer): Promise<string[]> {
   }
 }
 
-function buildHtml(courseTitle: string, pages: { title: string; content: string }[]): string {
+type PageItem =
+  | { type: "text"; title: string; content: string }
+  | { type: "video"; title: string; videoUrl: string; originalName: string };
+
+function buildHtml(courseTitle: string, pages: PageItem[]): string {
   const sidebarItems = pages
-    .map((p, i) => `<button class="sidebar-item${i === 0 ? " active" : ""}" onclick="goToPage(${i})" id="sidebar-${i}">
+    .map((p, i) => {
+      const icon = p.type === "video" ? "&#9654;" : "";
+      return `<button class="sidebar-item${i === 0 ? " active" : ""}" onclick="goToPage(${i})" id="sidebar-${i}">
       <span class="sidebar-num">${i + 1}</span>
+      ${icon ? `<span class="sidebar-icon">${icon}</span>` : ""}
       <span class="sidebar-title">${escapeHtml(p.title)}</span>
-    </button>`)
+    </button>`;
+    })
     .join("\n");
 
   const pageSlides = pages
-    .map((p, i) => `<div class="page-slide" id="page-${i}" style="display:${i === 0 ? "block" : "none"}">
-      <div class="page-hero">
-        <div class="page-hero-badge">${i + 1} / ${pages.length}</div>
+    .map((p, i) => {
+      const inner = p.type === "video"
+        ? `<div class="video-wrapper">
+          <video class="course-video" controls controlsList="nodownload" preload="metadata">
+            <source src="${p.videoUrl}" type="video/mp4">
+            <source src="${p.videoUrl}">
+            <p class="video-fallback">הדפדפן שלך אינו תומך בנגן הוידאו. <a href="${p.videoUrl}" target="_blank">לחץ כאן לצפייה</a></p>
+          </video>
+        </div>`
+        : `<div class="page-content"><div class="content-text">${escapeHtml((p as any).content).replace(/\n/g, "<br>")}</div></div>`;
+
+      return `<div class="page-slide" id="page-${i}" style="display:${i === 0 ? "block" : "none"}">
+      <div class="page-hero${p.type === "video" ? " page-hero-video" : ""}">
+        <div class="page-hero-badge">${p.type === "video" ? "&#9654; וידאו &nbsp;" : ""}${i + 1} / ${pages.length}</div>
         <h1 class="page-hero-title">${escapeHtml(p.title)}</h1>
       </div>
-      <div class="page-content"><div class="content-text">${escapeHtml(p.content).replace(/\n/g, "<br>")}</div></div>
-    </div>`)
+      ${inner}
+    </div>`;
+    })
     .join("\n");
 
   return `<!DOCTYPE html>
@@ -222,6 +252,7 @@ function buildHtml(courseTitle: string, pages: { title: string; content: string 
     .sidebar-item.active { background: rgba(37,99,235,0.15); border-right-color: var(--primary); color: #93c5fd; font-weight: 600; }
     .sidebar-num { min-width: 22px; height: 22px; border-radius: 5px; background: #334155; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #64748b; flex-shrink: 0; }
     .sidebar-item.active .sidebar-num { background: var(--primary); color: white; }
+    .sidebar-icon { font-size: 10px; color: #60a5fa; flex-shrink: 0; }
     .sidebar-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .main { flex: 1; margin-right: var(--sidebar-w); display: flex; flex-direction: column; min-height: 100vh; }
     .header { background: var(--surface); border-bottom: 1px solid var(--border); height: var(--header-h); position: sticky; top: 0; z-index: 30; display: flex; align-items: center; justify-content: space-between; padding: 0 28px; box-shadow: var(--shadow); }
@@ -241,10 +272,16 @@ function buildHtml(courseTitle: string, pages: { title: string; content: string 
     .content { max-width: 840px; margin: 0 auto; padding: 32px 28px 80px; width: 100%; }
     .page-hero { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border-radius: var(--r); padding: 36px 40px; margin-bottom: 24px; text-align: center; position: relative; overflow: hidden; }
     .page-hero::before { content: ''; position: absolute; top: -40px; left: -40px; width: 180px; height: 180px; border-radius: 50%; background: rgba(37,99,235,0.12); }
+    .page-hero-video { background: linear-gradient(135deg, #0c1a2e 0%, #0f172a 100%); }
+    .page-hero-video::before { background: rgba(37,99,235,0.18); }
     .page-hero-badge { display: inline-flex; align-items: center; background: rgba(37,99,235,0.25); color: #93c5fd; font-size: 12px; font-weight: 600; padding: 4px 14px; border-radius: 20px; margin-bottom: 14px; border: 1px solid rgba(37,99,235,0.3); position: relative; z-index: 1; }
     .page-hero-title { font-size: 26px; font-weight: 900; color: #f1f5f9; line-height: 1.25; position: relative; z-index: 1; }
     .page-content { background: var(--surface); border-radius: var(--r); border: 1px solid var(--border); padding: 32px 36px; margin-bottom: 20px; box-shadow: var(--shadow); font-size: 16px; line-height: 1.9; color: var(--text2); }
     .content-text { white-space: pre-wrap; word-break: break-word; }
+    .video-wrapper { background: #000; border-radius: var(--r); overflow: hidden; margin-bottom: 20px; box-shadow: 0 4px 24px rgba(0,0,0,0.18); }
+    .course-video { width: 100%; max-height: 520px; display: block; background: #000; }
+    .video-fallback { padding: 32px; text-align: center; color: var(--text3); font-size: 14px; }
+    .video-fallback a { color: var(--primary); text-decoration: underline; }
     .bottom-nav { display: flex; justify-content: space-between; align-items: center; margin-top: 28px; padding-top: 22px; border-top: 1px solid var(--border); }
     .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 35; }
     .sidebar-overlay.show { display: block; }
@@ -258,6 +295,7 @@ function buildHtml(courseTitle: string, pages: { title: string; content: string 
       .page-hero { padding: 28px 22px; }
       .page-hero-title { font-size: 20px; }
       .header { padding: 0 14px; }
+      .course-video { max-height: 260px; }
     }
     @media print {
       .sidebar, .header, .btn, .mobile-menu-btn, .sidebar-overlay { display: none !important; }
@@ -396,10 +434,35 @@ Deno.serve(async (req: Request) => {
 
     if (!assets || assets.length === 0) throw new Error("No assets found for this course");
 
-    const allPages: { title: string; content: string }[] = [];
+    const allPages: PageItem[] = [];
 
     for (const asset of assets) {
       console.log(`[CONVERT] Processing asset: ${asset.original_name} (${asset.file_type})`);
+
+      if (isVideoAsset(asset)) {
+        console.log(`[CONVERT] Video detected: ${asset.original_name}`);
+        const { data: signedUrlData, error: signedUrlError } = await supabase.storage
+          .from("course-assets")
+          .createSignedUrl(asset.storage_path, 604800);
+
+        if (signedUrlError || !signedUrlData?.signedUrl) {
+          console.error(`[CONVERT] Signed URL failed for ${asset.original_name}:`, signedUrlError);
+          allPages.push({
+            type: "text",
+            title: asset.original_name,
+            content: "לא ניתן ליצור קישור לסרטון. אנא נסה שוב מאוחר יותר.",
+          });
+        } else {
+          const nameWithoutExt = asset.original_name.replace(/\.[^/.]+$/, "");
+          allPages.push({
+            type: "video",
+            title: nameWithoutExt,
+            videoUrl: signedUrlData.signedUrl,
+            originalName: asset.original_name,
+          });
+        }
+        continue;
+      }
 
       const { data: fileData, error: downloadError } = await supabase.storage
         .from("course-assets")
@@ -407,7 +470,7 @@ Deno.serve(async (req: Request) => {
 
       if (downloadError || !fileData) {
         console.error(`[CONVERT] Download failed for ${asset.original_name}:`, downloadError);
-        allPages.push({ title: asset.original_name, content: "לא ניתן לטעון את הקובץ" });
+        allPages.push({ type: "text", title: asset.original_name, content: "לא ניתן לטעון את הקובץ" });
         continue;
       }
 
@@ -434,16 +497,16 @@ Deno.serve(async (req: Request) => {
           const title = firstLine.length > 5 && firstLine.length <= 80
             ? firstLine
             : `${asset.original_name} - חלק ${idx + 1}`;
-          allPages.push({ title, content });
+          allPages.push({ type: "text", title, content });
         });
       } catch (extractErr: any) {
         console.error(`[CONVERT] Extraction failed for ${asset.original_name}:`, extractErr.message);
-        allPages.push({ title: asset.original_name, content: `שגיאה בחילוץ תוכן: ${extractErr.message}` });
+        allPages.push({ type: "text", title: asset.original_name, content: `שגיאה בחילוץ תוכן: ${extractErr.message}` });
       }
     }
 
     if (allPages.length === 0) {
-      allPages.push({ title: course.title, content: "לא נמצא תוכן בקבצים המועלים" });
+      allPages.push({ type: "text", title: course.title, content: "לא נמצא תוכן בקבצים המועלים" });
     }
 
     const html = buildHtml(course.title, allPages);
