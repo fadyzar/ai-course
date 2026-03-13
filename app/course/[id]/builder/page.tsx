@@ -217,72 +217,49 @@ export default function CourseBuilderPage() {
   const handleDownloadOriginal = async () => {
     try {
       setIsDownloading(true);
-
-      const currentAssets = assets.length > 0 ? assets : (await supabase
-        .from('course_assets')
-        .select('*')
-        .eq('course_id', courseId)
-        .order('created_at', { ascending: false })).data || [];
-
-      if (currentAssets.length === 0) {
-        toast.error('אין קבצים להמיר. אנא העלה קובץ תחילה.');
-        return;
-      }
-
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
         toast.error('נא להתחבר מחדש');
         return;
       }
 
-      await (supabase.from('courses') as any)
-        .update({ status: 'processing' })
-        .eq('id', courseId);
-
-      setIsProcessing(true);
-
-      const { data: job, error: jobError } = await (supabase.from('jobs') as any)
-        .insert({
-          course_id: courseId,
-          type: 'process_course',
-          status: 'queued',
-          progress: 0,
-          metadata: { current_step: 'ממתין לעיבוד...' },
-        })
-        .select()
-        .maybeSingle();
-
-      if (jobError || !job) {
-        throw new Error('שגיאה ביצירת משימת עיבוד');
-      }
-
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
       const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-      toast.info('מתחיל עיבוד הקורס...');
-
-      const response = await fetch(`${supabaseUrl}/functions/v1/worker-process-jobs`, {
+      const response = await fetch(`${supabaseUrl}/functions/v1/convert-direct`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
           'apikey': supabaseKey || '',
           'Content-Type': 'application/json',
         },
+        body: JSON.stringify({ courseId }),
       });
 
       if (!response.ok) {
-        const err = await response.json().catch(() => ({ error: 'שגיאה לא ידועה' }));
-        throw new Error(err.error || 'שגיאה בעיבוד');
+        const err = await response.json();
+        throw new Error(err.error || 'Export failed');
       }
 
-      await loadCourse();
-      toast.success('הקורס עובד בהצלחה!');
-    } catch (error: any) {
-      toast.error('שגיאה בעיבוד: ' + error.message);
+      const { html, filename } = await response.json();
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename || 'course.html';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
       await (supabase.from('courses') as any)
-        .update({ status: 'draft' })
+        .update({ status: 'ready' })
         .eq('id', courseId);
-      setIsProcessing(false);
+
+      await loadCourse();
+      toast.success('הקובץ הומר בהצלחה!');
+    } catch (error: any) {
+      toast.error('שגיאה בייצוא: ' + error.message);
     } finally {
       setIsDownloading(false);
     }

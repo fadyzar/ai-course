@@ -7,7 +7,11 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { RefreshCw, CircleCheck as CheckCircle, Circle as XCircle, Clock, Play, FileText, Cpu, MessageSquare, Zap, ChevronDown, ChevronUp, TriangleAlert as AlertTriangle, Eye } from 'lucide-react';
+import {
+  RefreshCw, CheckCircle, XCircle, Clock, Play,
+  FileText, Cpu, MessageSquare, Zap, ChevronDown, ChevronUp,
+  AlertTriangle, Eye
+} from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 
@@ -291,7 +295,7 @@ export function ProcessingStatus({ courseId }: ProcessingStatusProps) {
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-semibold text-slate-900">
-                        {(job.type === 'rebuild_course' || job.type === 'process_course') ? 'בניית קורס' : job.type}
+                        {job.type === 'rebuild_course' ? 'בניית קורס' : job.type}
                       </span>
                       <Badge
                         variant="secondary"
