@@ -134,6 +134,20 @@ async function extractPdfText(buffer: ArrayBuffer): Promise<string[]> {
   return allTexts.length > 0 ? allTexts : pages;
 }
 
+function decodeXmlEntities(str: string): string {
+  return str
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'");
+}
+
+function stripAllTags(xml: string): string {
+  return xml.replace(/<[^>]+>/g, "");
+}
+
 async function extractPptx(buffer: ArrayBuffer): Promise<string[]> {
   try {
     const JSZip = (await import("npm:jszip@3.10.1")).default;
@@ -150,19 +164,22 @@ async function extractPptx(buffer: ArrayBuffer): Promise<string[]> {
     const slides: string[] = [];
     for (const slideFile of slideFiles) {
       const xml = await zip.files[slideFile].async("text");
-      const texts: string[] = [];
-      const matches = xml.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g);
-      for (const match of matches) {
-        const raw = match[1]
-          .replace(/&amp;/g, "&")
-          .replace(/&lt;/g, "<")
-          .replace(/&gt;/g, ">")
-          .replace(/&quot;/g, '"')
-          .replace(/&#39;/g, "'")
-          .trim();
-        if (raw.length > 0) texts.push(raw);
+      const paragraphs: string[] = [];
+
+      const paraMatches = xml.matchAll(/<a:p\b[^>]*>([\s\S]*?)<\/a:p>/g);
+      for (const paraMatch of paraMatches) {
+        const paraXml = paraMatch[1];
+        const runTexts: string[] = [];
+        const runMatches = paraXml.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g);
+        for (const run of runMatches) {
+          const text = decodeXmlEntities(run[1]).trim();
+          if (text.length > 0) runTexts.push(text);
+        }
+        const line = runTexts.join("").trim();
+        if (line.length > 0) paragraphs.push(line);
       }
-      const combined = texts.join(" ").trim();
+
+      const combined = paragraphs.join("\n").trim();
       if (combined.length > 0) slides.push(combined);
     }
 
