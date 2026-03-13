@@ -8,9 +8,9 @@ const corsHeaders = {
     "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-const BATCH_SIZE = 15;
-const PARALLEL_BATCHES = 5;
-const AI_MODEL = "claude-3-haiku-20240307";
+const BATCH_SIZE = 10;
+const PARALLEL_BATCHES = 3;
+const AI_MODEL = "claude-3-5-sonnet-20241022";
 const ANTHROPIC_VERSION = "2023-06-01";
 const MAX_RETRIES = 2;
 
@@ -137,9 +137,9 @@ async function extractPdfWithClaude(
             },
           ],
         }],
-        40960,
+        8192,
         MAX_RETRIES,
-        {},
+        { "anthropic-beta": "pdfs-2024-09-25" },
         0.3
       );
 
@@ -388,7 +388,7 @@ ${pagesBlock}
 - גוון את מיקום התשובה הנכונה - לא תמיד באינדקס 0
 - סיכום איכותי חייב להיות לפחות 100 מילים`;
 
-  const text = await callClaude(claudeApiKey, [{ role: "user", content: prompt }], 16384, MAX_RETRIES, {}, 0.7);
+  const text = await callClaude(claudeApiKey, [{ role: "user", content: prompt }], 8192, MAX_RETRIES, {}, 0.7);
 
   const jsonMatch = text.match(/\{[\s\S]*\}/);
   if (!jsonMatch) throw new Error("No JSON found in AI response");
