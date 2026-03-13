@@ -261,22 +261,16 @@ export default function CourseBuilderPage() {
 
       toast.info('מתחיל עיבוד הקורס...');
 
-      const response = await fetch(`${supabaseUrl}/functions/v1/worker-process-jobs`, {
+      fetch(`${supabaseUrl}/functions/v1/worker-process-jobs`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.access_token}`,
           'apikey': supabaseKey || '',
           'Content-Type': 'application/json',
         },
-      });
-
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ error: 'שגיאה לא ידועה' }));
-        throw new Error(err.error || 'שגיאה בעיבוד');
-      }
+      }).catch(() => {});
 
       await loadCourse();
-      toast.success('הקורס עובד בהצלחה!');
     } catch (error: any) {
       toast.error('שגיאה בעיבוד: ' + error.message);
       await (supabase.from('courses') as any)

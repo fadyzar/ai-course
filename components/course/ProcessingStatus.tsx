@@ -164,29 +164,16 @@ export function ProcessingStatus({ courseId }: ProcessingStatusProps) {
       const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
       if (!supabaseUrl || !supabaseKey) throw new Error('משתני סביבה חסרים');
 
-      const response = await fetch(
-        `${supabaseUrl}/functions/v1/worker-process-jobs`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-            'apikey': supabaseKey,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
+      fetch(`${supabaseUrl}/functions/v1/worker-process-jobs`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'apikey': supabaseKey,
+          'Content-Type': 'application/json',
+        },
+      }).catch(() => {});
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Worker failed: ${response.status} ${errorText}`);
-      }
-
-      const result = await response.json();
-      toast.success(`עובד עיבד ${result.processed || 0} משימות`);
-
-      setTimeout(() => {
-        loadJobs();
-      }, 1000);
+      toast.success('עיבוד הקורס התחיל');
     } catch (error: any) {
       toast.error('שגיאה בהפעלת עיבוד: ' + error.message);
     } finally {
