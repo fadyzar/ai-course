@@ -91,14 +91,18 @@ export async function processAsset(
     const buffer = await downloadAsset(supabase, assetRecord.storage_path);
     logger.info({ assetId, sizeBytes: buffer.length }, '[ORCHESTRATOR] File downloaded');
 
-    if (category === 'pptx') {
-      result = await processPptx(buffer, assetId, assetRecord.original_name, onProgress, supabase, courseId);
-    } else if (category === 'pdf') {
-      result = await processPdf(buffer, assetId, assetRecord.original_name, onProgress);
-    } else if (category === 'docx') {
-      result = await processDocx(buffer, assetId, assetRecord.original_name, onProgress);
-    } else {
-      throw new Error(`Unsupported file type: ${assetRecord.file_type}`);
+    try {
+      if (category === 'pptx') {
+        result = await processPptx(buffer, assetId, assetRecord.original_name, onProgress, supabase, courseId);
+      } else if (category === 'pdf') {
+        result = await processPdf(buffer, assetId, assetRecord.original_name, onProgress);
+      } else if (category === 'docx') {
+        result = await processDocx(buffer, assetId, assetRecord.original_name, onProgress);
+      } else {
+        throw new Error(`Unsupported file type: ${assetRecord.file_type}`);
+      }
+    } finally {
+      buffer.fill(0);
     }
   }
 
@@ -212,15 +216,19 @@ export async function processJobById(
           );
         } else {
           const buffer = await downloadAsset(supabase, assetRecord.storage_path);
-          if (category === 'pptx') {
-            assetResult = await processPptx(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'), supabase, job.course_id);
-          } else if (category === 'pdf') {
-            assetResult = await processPdf(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'));
-          } else if (category === 'docx') {
-            assetResult = await processDocx(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'));
-          } else {
-            logger.warn({ assetId: asset.id, fileType }, '[ORCHESTRATOR] Unsupported file type, skipping');
-            continue;
+          try {
+            if (category === 'pptx') {
+              assetResult = await processPptx(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'), supabase, job.course_id);
+            } else if (category === 'pdf') {
+              assetResult = await processPdf(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'));
+            } else if (category === 'docx') {
+              assetResult = await processDocx(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'));
+            } else {
+              logger.warn({ assetId: asset.id, fileType }, '[ORCHESTRATOR] Unsupported file type, skipping');
+              continue;
+            }
+          } finally {
+            buffer.fill(0);
           }
         }
 

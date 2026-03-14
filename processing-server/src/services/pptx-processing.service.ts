@@ -219,9 +219,10 @@ async function extractAndUploadEmbeddedVideo(
     const ext = fullPath.split('.').pop()?.toLowerCase() || 'mp4';
     const mimeType = VIDEO_MIME_MAP[ext] || 'video/mp4';
     const videoBuffer = await videoFile.async('nodebuffer');
+    const sizeBytes = videoBuffer.length;
     const storagePath = `${courseId}/extracted-video-slide${slideIndex}-${Date.now()}.${ext}`;
 
-    log(`מעלה סרטון מוטמע מ-PPTX: שקופית ${slideIndex} (${Math.round(videoBuffer.length / 1024)}KB)`);
+    log(`מעלה סרטון מוטמע מ-PPTX: שקופית ${slideIndex} (${Math.round(sizeBytes / 1024)}KB)`);
 
     const { error: uploadError } = await supabase.storage
       .from('course-assets')
@@ -229,6 +230,8 @@ async function extractAndUploadEmbeddedVideo(
         contentType: mimeType,
         upsert: true,
       });
+
+    (videoBuffer as any).buffer?.fill(0);
 
     if (uploadError) {
       log(`שגיאה בהעלאת סרטון מוטמע: ${uploadError.message}`);
@@ -241,7 +244,7 @@ async function extractAndUploadEmbeddedVideo(
       storagePath,
       originalName: `video-slide-${slideIndex}.${ext}`,
       mimeType,
-      sizeBytes: videoBuffer.length,
+      sizeBytes,
       sourceSlideIndex: slideIndex,
     };
 
@@ -268,6 +271,7 @@ export async function processPptx(
   log(`פותח קובץ PPTX: ${originalName}`);
 
   const zip = await JSZip.loadAsync(buffer);
+  (buffer as any).buffer?.fill(0);
 
   const slideFiles = Object.keys(zip.files)
     .filter((f) => f.match(/^ppt\/slides\/slide\d+\.xml$/))
