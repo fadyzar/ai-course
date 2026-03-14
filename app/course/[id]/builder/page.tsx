@@ -56,7 +56,7 @@ export default function CourseBuilderPage() {
     if (shouldAutoConvert && !autoConvertTriggered && assets.length > 0 && !loading) {
       setAutoConvertTriggered(true);
       router.replace(`/course/${courseId}/builder`);
-      handleDownloadOriginal();
+      handleProcessWithServer();
     }
   }, [searchParams, assets, loading, autoConvertTriggered]);
 
@@ -149,6 +149,93 @@ export default function CourseBuilderPage() {
     }
   };
 
+  const handleProcessWithServer = async () => {
+    try {
+      const currentAssets = assets.length > 0 ? assets : (await supabase
+        .from('course_assets')
+        .select('*')
+        .eq('course_id', courseId)
+        .order('created_at', { ascending: false })).data || [];
+
+      if (currentAssets.length === 0) {
+        toast.error('אין קבצים להמיר. אנא העלה קובץ תחילה.');
+        return;
+      }
+
+      const processingServerUrl = process.env.NEXT_PUBLIC_PROCESSING_SERVER_URL;
+
+      if (!processingServerUrl) {
+        toast.error('שגיאת הגדרות: כתובת שרת העיבוד לא מוגדרת');
+        return;
+      }
+
+      let serverOnline = false;
+      try {
+        const healthRes = await fetch(`${processingServerUrl}/health`, {
+          signal: AbortSignal.timeout(8000),
+        });
+        serverOnline = healthRes.ok;
+      } catch {
+        serverOnline = false;
+      }
+
+      if (!serverOnline) {
+        toast.error('בעייה בשרת - השרת אינו זמין כרגע. אנא נסה שוב מאוחר יותר.');
+        return;
+      }
+
+      setIsDownloading(true);
+      setIsProcessing(true);
+
+      await (supabase.from('courses') as any)
+        .update({ status: 'processing' })
+        .eq('id', courseId);
+
+      toast.info('מעבד קבצים בשרת...');
+
+      for (const asset of currentAssets) {
+        toast.info(`מעבד קובץ: ${asset.original_name}`);
+
+        let response: Response;
+        try {
+          response = await fetch(`${processingServerUrl}/process-asset`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ assetId: asset.id, courseId }),
+            signal: AbortSignal.timeout(300000),
+          });
+        } catch (fetchErr: any) {
+          const msg = fetchErr.name === 'TimeoutError'
+            ? 'בעייה בשרת - הזמן פג. נסה קובץ קטן יותר.'
+            : 'בעייה בשרת - לא ניתן להתחבר לשרת העיבוד.';
+          throw new Error(msg);
+        }
+
+        if (!response.ok) {
+          let errMsg = `שגיאת שרת (${response.status})`;
+          try {
+            const err = await response.json();
+            errMsg = err.error || errMsg;
+          } catch {}
+          throw new Error(`בעייה בשרת: ${errMsg}`);
+        }
+
+        const result = await response.json();
+        toast.success(`${asset.original_name} עובד - ${result.sections ?? 0} פרקים, ${result.pages ?? 0} עמודים`);
+      }
+
+      await loadCourse();
+    } catch (error: any) {
+      toast.error(error.message || 'שגיאה בעיבוד הקובץ');
+      await (supabase.from('courses') as any)
+        .update({ status: 'draft' })
+        .eq('id', courseId);
+      setIsProcessing(false);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   const handleStartProcessing = async () => {
     try {
       const currentAssets = assets.length > 0 ? assets : (await supabase
@@ -211,57 +298,6 @@ export default function CourseBuilderPage() {
         .update({ status: 'draft' })
         .eq('id', courseId);
       setIsProcessing(false);
-    }
-  };
-
-  const handleDownloadOriginal = async () => {
-    try {
-      setIsDownloading(true);
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        toast.error('נא להתחבר מחדש');
-        return;
-      }
-
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-      const response = await fetch(`${supabaseUrl}/functions/v1/convert-direct`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'apikey': supabaseKey || '',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ courseId }),
-      });
-
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Export failed');
-      }
-
-      const { html, filename } = await response.json();
-      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename || 'course.html';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-
-      await (supabase.from('courses') as any)
-        .update({ status: 'ready' })
-        .eq('id', courseId);
-
-      await loadCourse();
-      toast.success('הקובץ הומר בהצלחה!');
-    } catch (error: any) {
-      toast.error('שגיאה בייצוא: ' + error.message);
-    } finally {
-      setIsDownloading(false);
     }
   };
 
@@ -344,8 +380,8 @@ export default function CourseBuilderPage() {
           <div className="flex flex-col gap-2">
             {assets.length > 0 && (
               <Button
-                onClick={handleDownloadOriginal}
-                disabled={isDownloading}
+                onClick={handleProcessWithServer}
+                disabled={isDownloading || isProcessing}
                 className="bg-blue-600 hover:bg-blue-700 text-white"
               >
                 {isDownloading ? (
@@ -353,7 +389,7 @@ export default function CourseBuilderPage() {
                 ) : (
                   <Download className="h-4 w-4 ml-2" />
                 )}
-                {isDownloading ? 'ממיר...' : 'המר למצגת'}
+                {isDownloading ? 'מעבד...' : 'המר למצגת'}
               </Button>
             )}
             <Button
@@ -406,7 +442,7 @@ export default function CourseBuilderPage() {
                     loadAssets();
                     toast.success('הקובץ הועלה בהצלחה!');
                   }}
-                  onStartProcessing={handleDownloadOriginal}
+                  onStartProcessing={handleProcessWithServer}
                 />
               </TabsContent>
               <TabsContent value="files">

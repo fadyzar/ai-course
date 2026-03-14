@@ -1,4 +1,5 @@
 import JSZip from 'jszip';
+import { SupabaseClient } from '@supabase/supabase-js';
 import {
   ProcessingResult,
   SectionOutput,
@@ -6,11 +7,24 @@ import {
   QuestionOutput,
   SlideData,
   SlideRelationship,
+  DerivedAsset,
 } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
 const YOUTUBE_PATTERN = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([A-Za-z0-9_-]{11})/;
 const VIMEO_PATTERN = /vimeo\.com\/(\d+)/;
+
+const VIDEO_MIME_MAP: Record<string, string> = {
+  mp4: 'video/mp4',
+  m4v: 'video/mp4',
+  mov: 'video/quicktime',
+  avi: 'video/x-msvideo',
+  wmv: 'video/x-ms-wmv',
+  webm: 'video/webm',
+  mkv: 'video/x-matroska',
+  mpeg: 'video/mpeg',
+  mpg: 'video/mpeg',
+};
 
 function extractTextFromXml(xml: string): string {
   const matches = xml.match(/<a:t[^>]*>([^<]*)<\/a:t>/g) || [];
@@ -183,11 +197,68 @@ function groupSlidesIntoSections(slides: SlideData[]): Array<{
   return groups.filter((g) => g.sectionTitle || g.slides.length > 0);
 }
 
+async function extractAndUploadEmbeddedVideo(
+  zip: JSZip,
+  relationship: SlideRelationship,
+  slideFile: string,
+  courseId: string,
+  slideIndex: number,
+  supabase: SupabaseClient,
+  log: (msg: string) => void
+): Promise<{ storagePath: string; derivedAsset: DerivedAsset } | null> {
+  try {
+    const rawTarget = relationship.target.replace(/^\.\.\//, '');
+    const fullPath = `ppt/${rawTarget}`;
+
+    const videoFile = zip.files[fullPath];
+    if (!videoFile) {
+      log(`לא נמצא קובץ וידאו ב-ZIP: ${fullPath}`);
+      return null;
+    }
+
+    const ext = fullPath.split('.').pop()?.toLowerCase() || 'mp4';
+    const mimeType = VIDEO_MIME_MAP[ext] || 'video/mp4';
+    const videoBuffer = await videoFile.async('nodebuffer');
+    const storagePath = `${courseId}/extracted-video-slide${slideIndex}-${Date.now()}.${ext}`;
+
+    log(`מעלה סרטון מוטמע מ-PPTX: שקופית ${slideIndex} (${Math.round(videoBuffer.length / 1024)}KB)`);
+
+    const { error: uploadError } = await supabase.storage
+      .from('course-assets')
+      .upload(storagePath, videoBuffer, {
+        contentType: mimeType,
+        upsert: true,
+      });
+
+    if (uploadError) {
+      log(`שגיאה בהעלאת סרטון מוטמע: ${uploadError.message}`);
+      return null;
+    }
+
+    log(`סרטון מוטמע הועלה: ${storagePath}`);
+
+    const derivedAsset: DerivedAsset = {
+      storagePath,
+      originalName: `video-slide-${slideIndex}.${ext}`,
+      mimeType,
+      sizeBytes: videoBuffer.length,
+      sourceSlideIndex: slideIndex,
+    };
+
+    return { storagePath, derivedAsset };
+  } catch (err: any) {
+    log(`שגיאה בחילוץ סרטון מוטמע: ${err.message}`);
+    return null;
+  }
+}
+
 export async function processPptx(
   buffer: Buffer,
   assetId: string,
   originalName: string,
-  onProgress?: (message: string) => void
+  onProgress?: (message: string) => void,
+  supabase?: SupabaseClient,
+  courseId?: string
 ): Promise<ProcessingResult> {
   const log = (msg: string) => {
     logger.info({ assetId, msg }, '[PPTX]');
@@ -209,7 +280,9 @@ export async function processPptx(
   const totalSlides = slideFiles.length;
   log(`נמצאו ${totalSlides} שקופיות`);
 
-  const slides: SlideData[] = [];
+  const slides: (SlideData & { embeddedVideoStoragePath?: string })[] = [];
+  const derivedAssets: DerivedAsset[] = [];
+  const embeddedVideoMap = new Map<number, string>();
 
   for (let i = 0; i < slideFiles.length; i++) {
     const slideFile = slideFiles[i];
@@ -219,20 +292,42 @@ export async function processPptx(
     const externalVideoUrl = extractExternalVideoUrl(xml);
     const relationships = await parseSlideRelationships(zip, slideFile);
 
+    const videoRels = relationships.filter((r) => r.type === 'video');
+    let embeddedVideoStoragePath: string | undefined;
+
+    if (videoRels.length > 0 && supabase && courseId) {
+      for (const videoRel of videoRels) {
+        const result = await extractAndUploadEmbeddedVideo(
+          zip,
+          videoRel,
+          slideFile,
+          courseId,
+          i + 1,
+          supabase,
+          log
+        );
+        if (result) {
+          embeddedVideoStoragePath = result.storagePath;
+          derivedAssets.push(result.derivedAsset);
+          embeddedVideoMap.set(i + 1, result.storagePath);
+          break;
+        }
+      }
+    }
+
     const hasMedia =
       relationships.some((r) => r.type === 'image' || r.type === 'video') ||
       !!externalVideoUrl;
 
-    const slideData: SlideData = {
+    slides.push({
       index: i + 1,
       text,
       isChapterSlide: isChapterSlide(text, hasMedia),
       externalVideoUrl,
       hasMedia,
       relationships,
-    };
-
-    slides.push(slideData);
+      embeddedVideoStoragePath,
+    });
   }
 
   log(`מסווג שקופיות לפרקים...`);
@@ -254,8 +349,19 @@ export async function processPptx(
       metadata: { slideCount: group.slides.length },
     });
 
-    for (const slide of group.slides) {
-      const pageType = slide.externalVideoUrl ? 'video' : 'pptx_slide';
+    for (const slide of group.slides as (SlideData & { embeddedVideoStoragePath?: string })[]) {
+      const embeddedPath = embeddedVideoMap.get(slide.index);
+
+      let pageType: 'pptx_slide' | 'video' = 'pptx_slide';
+      let videoStoragePath: string | undefined;
+
+      if (embeddedPath) {
+        pageType = 'video';
+        videoStoragePath = embeddedPath;
+      } else if (slide.externalVideoUrl) {
+        pageType = 'video';
+      }
+
       const html = buildSlideHtml(slide, totalSlides);
 
       pages.push({
@@ -266,10 +372,12 @@ export async function processPptx(
         htmlContent: html,
         assetId,
         slideIndex: slide.index,
+        videoStoragePath,
         sourceRefs: {
           slideIndex: slide.index,
           hasMedia: slide.hasMedia,
           externalVideoUrl: slide.externalVideoUrl,
+          embeddedVideoStoragePath: videoStoragePath,
           ai: false,
         },
       });
@@ -279,13 +387,13 @@ export async function processPptx(
   }
 
   log(
-    `הושלם: ${sections.length} פרקים, ${pages.length} עמודים, ${questions.length} שאלות`
+    `הושלם: ${sections.length} פרקים, ${pages.length} עמודים, ${derivedAssets.length} סרטונים מוטמעים`
   );
 
   return {
     sections,
     pages,
     questions,
-    derivedAssets: [],
+    derivedAssets,
   };
 }

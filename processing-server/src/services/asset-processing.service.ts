@@ -77,7 +77,7 @@ export async function processAsset(
     logger.info({ assetId, sizeBytes: buffer.length }, '[ORCHESTRATOR] File downloaded');
 
     if (category === 'pptx') {
-      result = await processPptx(buffer, assetId, assetRecord.original_name, onProgress);
+      result = await processPptx(buffer, assetId, assetRecord.original_name, onProgress, supabase, courseId);
     } else if (category === 'pdf') {
       result = await processPdf(buffer, assetId, assetRecord.original_name, onProgress);
     } else if (category === 'docx') {
@@ -198,7 +198,7 @@ export async function processJobById(
         } else {
           const buffer = await downloadAsset(supabase, assetRecord.storage_path);
           if (category === 'pptx') {
-            assetResult = await processPptx(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'));
+            assetResult = await processPptx(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'), supabase, job.course_id);
           } else if (category === 'pdf') {
             assetResult = await processPdf(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'));
           } else if (category === 'docx') {

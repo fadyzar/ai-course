@@ -184,6 +184,28 @@ export async function writeCourse(
       .eq('id', assetId);
   }
 
+  if (result.derivedAssets && result.derivedAssets.length > 0) {
+    const derivedInserts = result.derivedAssets.map((da) => ({
+      course_id: courseId,
+      file_type: da.mimeType.split('/')[1] || 'mp4',
+      storage_path: da.storagePath,
+      original_name: da.originalName,
+      size_bytes: da.sizeBytes,
+      status: 'processed',
+      metadata: { sourceSlideIndex: da.sourceSlideIndex, extracted: true },
+    }));
+
+    const { error: derivedError } = await supabase
+      .from('course_assets')
+      .insert(derivedInserts);
+
+    if (derivedError) {
+      logger.warn({ err: derivedError.message }, '[WRITE] Derived assets insert warning');
+    } else {
+      logger.info({ count: derivedInserts.length }, '[WRITE] Derived assets inserted');
+    }
+  }
+
   await logProgress(supabase, jobId, 'info', 'הקורס מוכן!', 100);
 
   logger.info({ courseId, sections: sectionIds.length, pages: allPageIds.length }, '[WRITE] Done');
