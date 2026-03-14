@@ -45,8 +45,23 @@ export async function processAsset(
     .eq('id', assetId)
     .maybeSingle();
 
+  logger.info(
+    {
+      assetId,
+      courseId,
+      found: !!asset,
+      errorCode: assetError?.code,
+      errorMessage: assetError?.message,
+      errorDetails: assetError?.details,
+      errorHint: assetError?.hint,
+    },
+    '[ORCHESTRATOR] Asset lookup result'
+  );
+
   if (assetError || !asset) {
-    throw new Error(`Asset not found: ${assetError?.message || 'not found'}`);
+    throw new Error(
+      `Asset not found: assetId=${assetId} error=${assetError?.code}:${assetError?.message}:${assetError?.details}`
+    );
   }
 
   const assetRecord = asset as AssetRecord;

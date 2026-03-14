@@ -195,6 +195,7 @@ export default function CourseBuilderPage() {
 
       for (const asset of currentAssets) {
         toast.info(`מעבד קובץ: ${asset.original_name}`);
+        console.log('[ProcessAsset] Sending request:', { assetId: asset.id, courseId, assetName: asset.original_name, assetStatus: asset.status });
 
         let response: Response;
         try {
@@ -216,7 +217,9 @@ export default function CourseBuilderPage() {
           try {
             const err = await response.json();
             errMsg = err.error || errMsg;
+            console.error('[ProcessAsset] Server error full response:', JSON.stringify(err));
           } catch {}
+          console.error('[ProcessAsset] Failed:', { status: response.status, assetId: asset.id, courseId });
           throw new Error(`בעייה בשרת: ${errMsg}`);
         }
 

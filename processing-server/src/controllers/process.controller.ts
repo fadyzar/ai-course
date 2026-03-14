@@ -18,10 +18,22 @@ export async function handleProcessAsset(
     });
   }
 
-  logger.info({ assetId, courseId }, '[CONTROLLER] process-asset request');
+  logger.info({ assetId, courseId }, '[CONTROLLER] process-asset request received');
 
   try {
     const supabase = getAdminClient();
+
+    logger.info({ assetId }, '[CONTROLLER] testing DB connectivity - querying course_assets');
+    const { data: testData, error: testError } = await supabase
+      .from('course_assets')
+      .select('id, file_type, status, course_id')
+      .eq('id', assetId)
+      .maybeSingle();
+    logger.info(
+      { assetId, found: !!testData, testError: testError?.message, row: testData },
+      '[CONTROLLER] DB probe result'
+    );
+
     const result = await processAsset(supabase, { assetId, courseId });
 
     return {
@@ -33,11 +45,12 @@ export async function handleProcessAsset(
       questions: result.questions.length,
     };
   } catch (err: any) {
-    logger.error({ assetId, courseId, err: err.message }, '[CONTROLLER] process-asset failed');
+    logger.error({ assetId, courseId, err: err.message, stack: err.stack }, '[CONTROLLER] process-asset failed');
     return reply.status(500).send({
       success: false,
       error: err.message,
       code: 'PROCESSING_FAILED',
+      debug: { assetId, courseId },
     });
   }
 }
