@@ -14,9 +14,10 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { ArrowLeft, Settings, Info, Eye, Download, Loader as Loader2 } from 'lucide-react';
+import { ArrowLeft, Info, Download, Loader as Loader2, CirclePlus as PlusCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
+import { ManualQuestionDialog } from '@/components/course/ManualQuestionDialog';
 
 type Course = Database['public']['Tables']['courses']['Row'];
 type Asset = Database['public']['Tables']['course_assets']['Row'];
@@ -35,6 +36,7 @@ export default function CourseBuilderPage() {
   const [isExporting, setIsExporting] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [autoConvertTriggered, setAutoConvertTriggered] = useState(false);
+  const [manualQuestionOpen, setManualQuestionOpen] = useState(false);
 
   useEffect(() => {
     if (courseId) {
@@ -339,40 +341,29 @@ export default function CourseBuilderPage() {
               <p className="text-slate-600 mt-1 text-sm md:text-base">{course.description || 'בונה קורס אינטראקטיבי'}</p>
             </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {course.status === 'ready' && (
-              <>
-                <Button asChild variant="default" size="lg" className="flex-1 md:flex-none">
-                  <Link href={`/course/${courseId}/view`}>
-                    <Eye className="h-4 w-4 ml-2" />
-                    צפה בקורס
-                  </Link>
-                </Button>
-                <Button
-                  onClick={handleExportHtml}
-                  variant="outline"
-                  className="flex-1 md:flex-none"
-                  disabled={isExporting}
-                >
-                  {isExporting ? (
-                    <Loader2 className="h-4 w-4 ml-2 animate-spin" />
-                  ) : (
-                    <Download className="h-4 w-4 ml-2" />
-                  )}
-                  ייצא כ-HTML
-                </Button>
-              </>
-            )}
+          <div className="flex flex-col gap-2">
             {assets.length > 0 && (
-              <Button onClick={handleStartProcessing} disabled={isProcessing} className="flex-1 md:flex-none bg-blue-600 hover:bg-blue-700 text-white">
-                {isProcessing ? (
+              <Button
+                onClick={handleDownloadOriginal}
+                disabled={isDownloading}
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                {isDownloading ? (
                   <Loader2 className="h-4 w-4 ml-2 animate-spin" />
                 ) : (
-                  <Settings className="h-4 w-4 ml-2" />
+                  <Download className="h-4 w-4 ml-2" />
                 )}
-                {isProcessing ? 'מעבד...' : 'המר לקורס'}
+                {isDownloading ? 'ממיר...' : 'המר למצגת'}
               </Button>
             )}
+            <Button
+              onClick={() => setManualQuestionOpen(true)}
+              variant="outline"
+              className="border-green-300 text-green-700 hover:bg-green-50 hover:border-green-400"
+            >
+              <PlusCircle className="h-4 w-4 ml-2" />
+              הוסף שאלה ידנית
+            </Button>
           </div>
         </div>
 
@@ -449,6 +440,14 @@ export default function CourseBuilderPage() {
           </div>
         </div>
       </div>
+      <ManualQuestionDialog
+        courseId={courseId}
+        open={manualQuestionOpen}
+        onOpenChange={setManualQuestionOpen}
+        onQuestionAdded={() => {
+          toast.success('השאלה נוספה לקורס!');
+        }}
+      />
     </DashboardLayout>
   );
 }

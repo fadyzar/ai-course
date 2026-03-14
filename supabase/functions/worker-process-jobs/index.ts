@@ -513,12 +513,23 @@ async function processJob(supabase: any, job: any) {
   }
 
   let allPages: Array<{ index: number; content: string; assetName: string }> = [];
+  const videoAssets: Array<{ asset: any; orderOffset: number }> = [];
+
+  const VIDEO_TYPES = new Set(["mp4", "mpeg", "mov", "avi", "webm", "mkv", "m4v"]);
 
   const logFn = async (msg: string) => {
     await log(supabase, job.id, "info", msg, 8);
   };
 
   for (const asset of assets) {
+    const fileType = (asset.file_type || "").toLowerCase();
+
+    if (VIDEO_TYPES.has(fileType)) {
+      await log(supabase, job.id, "info", `סרטון זוהה: ${asset.original_name}`, 8);
+      videoAssets.push({ asset, orderOffset: allPages.length });
+      continue;
+    }
+
     await log(supabase, job.id, "info", `מוריד ${asset.original_name}...`, 8);
 
     const { data: fileData, error: dlError } = await supabase.storage
@@ -751,6 +762,43 @@ async function processJob(supabase: any, job: any) {
     `סיים: ${totalPages} עמודים, ${totalQuestionsCreated} שאלות${useAI ? ` (${aiSuccessCount} מקבצי AI הצליחו)` : ""}`,
     99
   );
+
+  if (videoAssets.length > 0) {
+    await log(supabase, job.id, "info", `שומר ${videoAssets.length} סרטונים...`, 99);
+
+    for (let vi = 0; vi < videoAssets.length; vi++) {
+      const { asset } = videoAssets[vi];
+      const globalOrderIndex = allPages.length + vi;
+
+      const { data: videoSection } = await supabase
+        .from("course_sections")
+        .insert({
+          course_id: job.course_id,
+          title: sanitizeText(asset.original_name.replace(/\.[^.]+$/, "")),
+          order_index: globalOrderIndex,
+          source_slide_id: `video_asset_${asset.id}`,
+          asset_id: asset.id,
+        })
+        .select()
+        .maybeSingle();
+
+      if (!videoSection) continue;
+
+      await supabase.from("course_pages").insert({
+        course_id: job.course_id,
+        section_id: videoSection.id,
+        order_index: globalOrderIndex,
+        page_type: "video",
+        title: sanitizeText(asset.original_name.replace(/\.[^.]+$/, "")),
+        html_content: "",
+        video_storage_path: asset.storage_path,
+        asset_id: asset.id,
+        source_refs: { asset_id: asset.id, original_name: asset.original_name },
+      });
+    }
+
+    await log(supabase, job.id, "info", `נשמרו ${videoAssets.length} סרטונים`, 99);
+  }
 }
 
 Deno.serve(async (req: Request) => {

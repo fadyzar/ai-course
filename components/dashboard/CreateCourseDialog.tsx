@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { Progress } from '@/components/ui/progress';
 import {
   Dialog,
   DialogContent,
@@ -19,7 +20,187 @@ import { toast } from 'sonner';
 import { useDropzone } from 'react-dropzone';
 import { cn } from '@/lib/utils';
 
-type SourceType = 'upload' | 'google_drive' | 'canva';
+const CHUNK_SIZE = 6 * 1024 * 1024; // 6MB
+
+async function uploadLargeFile(
+  bucket: string,
+  path: string,
+  file: File,
+  onProgress: (pct: number) => void
+): Promise<void> {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  const { data: { session } } = await supabase.auth.getSession();
+  const token = session?.access_token || supabaseKey;
+
+  const createRes = await fetch(`${supabaseUrl}/storage/v1/upload/resumable`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'apikey': supabaseKey,
+      'x-upsert': 'true',
+      'Upload-Length': String(file.size),
+      'Upload-Metadata': [
+        `bucketName ${btoa(bucket)}`,
+        `objectName ${btoa(path)}`,
+        `contentType ${btoa(file.type || 'application/octet-stream')}`,
+        `cacheControl ${btoa('3600')}`,
+      ].join(','),
+      'Tus-Resumable': '1.0.0',
+      'Content-Length': '0',
+    },
+  });
+
+  if (!createRes.ok && createRes.status !== 201) {
+    const text = await createRes.text();
+    throw new Error(`שגיאה ביצירת upload: ${text}`);
+  }
+
+  const location = createRes.headers.get('Location');
+  if (!location) throw new Error('לא התקבל Location מהשרת');
+
+  const tusUrl = location.startsWith('http')
+    ? location
+    : `${supabaseUrl}${location}`;
+
+  let offset = 0;
+  while (offset < file.size) {
+    const end = Math.min(offset + CHUNK_SIZE, file.size);
+    const chunk = file.slice(offset, end);
+
+    const patchRes = await fetch(tusUrl, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'apikey': supabaseKey,
+        'Content-Type': 'application/offset+octet-stream',
+        'Upload-Offset': String(offset),
+        'Tus-Resumable': '1.0.0',
+        'Content-Length': String(chunk.size),
+      },
+      body: chunk,
+    });
+
+    if (!patchRes.ok) {
+      const text = await patchRes.text();
+      throw new Error(`שגיאה בהעלאה: ${text}`);
+    }
+
+    offset = end;
+    onProgress(Math.round((offset / file.size) * 100));
+  }
+}
+
+// ===== OneDrive: הורדה ישירה בדפדפן =====
+function isOneDriveUrl(url: string): boolean {
+  return url.includes('onedrive.live.com') ||
+    url.includes('1drv.ms') ||
+    url.includes('sharepoint.com');
+}
+
+function buildOneDriveDirectUrl(url: string): string {
+  // המר קישור שיתוף לקישור הורדה ישירה
+  try {
+    const parsed = new URL(url);
+
+    // onedrive.live.com/redir?... → download
+    if (parsed.hostname === 'onedrive.live.com') {
+      const resid = parsed.searchParams.get('resid');
+      const authkey = parsed.searchParams.get('authkey');
+      if (resid) {
+        return `https://onedrive.live.com/download?resid=${encodeURIComponent(resid)}&authkey=${encodeURIComponent(authkey || '')}`;
+      }
+    }
+
+    // קישור שיתוף רגיל — החלף view בdownload
+    return url
+      .replace('view.aspx', 'download.aspx')
+      .replace('?download=0', '?download=1')
+      + (url.includes('?') ? '&download=1' : '?download=1');
+  } catch {
+    return url;
+  }
+}
+
+async function downloadOneDriveInBrowser(
+  url: string,
+  onProgress: (pct: number) => void
+): Promise<File> {
+  onProgress(5);
+
+  // שלב 1: נסה להוריד ישירות
+  let finalUrl = url;
+
+  // אם זה קישור קצר 1drv.ms — צריך לפתור אותו
+  // הדפדפן יעשה redirect אוטומטי
+  if (url.includes('1drv.ms') || url.includes('/redir?')) {
+    // עבור 1drv.ms — הדפדפן יעקוב אחרי ה-redirect
+    finalUrl = url;
+  } else {
+    finalUrl = buildOneDriveDirectUrl(url);
+  }
+
+  onProgress(10);
+
+  const response = await fetch(finalUrl, {
+    method: 'GET',
+    redirect: 'follow',
+  });
+
+  if (!response.ok) {
+    throw new Error(`שגיאה בהורדה מ-OneDrive: ${response.status}. ודא שהקובץ משותף ציבורית.`);
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('text/html')) {
+    throw new Error('OneDrive מחזיר דף HTML — ודא שהקישור הוא "כל מי שיש לו קישור יכול להציג" ושהעתקת את קישור ההורדה הישיר.');
+  }
+
+  onProgress(30);
+
+  // קרא את הקובץ עם progress
+  const contentLength = response.headers.get('content-length');
+  const total = contentLength ? parseInt(contentLength) : 0;
+
+  const reader = response.body!.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (total > 0) {
+      onProgress(30 + Math.round((received / total) * 60));
+    }
+  }
+
+  onProgress(90);
+
+  const blob = new Blob(chunks, { type: contentType || 'application/octet-stream' });
+
+  // נסה לחלץ שם קובץ
+  const disposition = response.headers.get('content-disposition') || '';
+  let filename = 'onedrive_file';
+  const fnMatch = disposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+  if (fnMatch) {
+    filename = fnMatch[1].replace(/['"]/g, '').trim();
+  }
+
+  // קבע סיומת לפי content-type אם אין
+  if (!filename.includes('.')) {
+    if (contentType.includes('presentationml')) filename += '.pptx';
+    else if (contentType.includes('pdf')) filename += '.pdf';
+    else if (contentType.includes('wordprocessingml')) filename += '.docx';
+    else filename += '.pptx';
+  }
+
+  onProgress(95);
+  return new File([blob], filename, { type: blob.type });
+}
+
+type SourceType = 'upload' | 'google_drive' | 'onedrive' | 'canva';
 type FeedbackMode = 'immediate' | 'end' | 'none';
 
 interface CourseSettings {
@@ -58,6 +239,8 @@ export function CreateCourseDialog() {
   const [file, setFile] = useState<File | null>(null);
   const [settings, setSettings] = useState<CourseSettings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [statusMsg, setStatusMsg] = useState('');
 
   const onDrop = useCallback((accepted: File[]) => {
     if (accepted.length > 0) {
@@ -74,6 +257,18 @@ export function CreateCourseDialog() {
     multiple: false,
   });
 
+  // זיהוי אוטומטי של סוג URL
+  const handleUrlChange = (val: string) => {
+    setSourceUrl(val);
+    if (isOneDriveUrl(val)) {
+      setSourceType('onedrive');
+    } else if (val.includes('drive.google.com') || val.includes('docs.google.com')) {
+      setSourceType('google_drive');
+    } else if (val.includes('canva.com')) {
+      setSourceType('canva');
+    }
+  };
+
   const canProceedStep1 = () => {
     if (!title.trim()) return false;
     if (sourceType === 'upload') return !!file;
@@ -88,6 +283,8 @@ export function CreateCourseDialog() {
     setSourceUrl('');
     setFile(null);
     setSettings(DEFAULT_SETTINGS);
+    setUploadProgress(0);
+    setStatusMsg('');
   };
 
   const triggerConvert = async (courseId: string, session: any) => {
@@ -113,6 +310,9 @@ export function CreateCourseDialog() {
   const handleCreate = async () => {
     if (!profile?.id) return;
     setLoading(true);
+    setUploadProgress(0);
+    setStatusMsg('');
+
     try {
       const courseData: any = {
         title: title.trim(),
@@ -134,14 +334,13 @@ export function CreateCourseDialog() {
       if (!session) throw new Error('לא מחובר');
 
       if (sourceType === 'upload' && file) {
+        // === העלאת קובץ רגיל ===
         const ext = file.name.split('.').pop()?.toLowerCase() || 'pdf';
         const sanitizedName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
         const storagePath = `${course.id}/${Date.now()}_${sanitizedName}`;
 
-        const { error: uploadError } = await supabase.storage
-          .from('course-assets')
-          .upload(storagePath, file, { contentType: file.type });
-        if (uploadError) throw uploadError;
+        setStatusMsg('מעלה קובץ...');
+        await uploadLargeFile('course-assets', storagePath, file, setUploadProgress);
 
         const { error: assetError } = await (supabase.from('course_assets') as any).insert({
           course_id: course.id,
@@ -157,11 +356,56 @@ export function CreateCourseDialog() {
         router.push(`/course/${course.id}/builder`);
         triggerConvert(course.id, session);
 
+      } else if (sourceType === 'onedrive' && sourceUrl.trim()) {
+        // === OneDrive: הורדה בדפדפן + העלאה ===
+        setStatusMsg('מוריד קובץ מ-OneDrive...');
+
+        let downloadedFile: File;
+        try {
+          downloadedFile = await downloadOneDriveInBrowser(
+            sourceUrl.trim(),
+            (pct) => {
+              setUploadProgress(Math.round(pct * 0.5)); // 0–50% = הורדה
+              if (pct < 30) setStatusMsg('מתחבר ל-OneDrive...');
+              else if (pct < 90) setStatusMsg(`מוריד קובץ... ${Math.round(pct)}%`);
+              else setStatusMsg('מסיים הורדה...');
+            }
+          );
+        } catch (err: any) {
+          throw new Error(err.message || 'שגיאה בהורדה מ-OneDrive');
+        }
+
+        setStatusMsg('מעלה לשרת...');
+        const ext = downloadedFile.name.split('.').pop()?.toLowerCase() || 'pptx';
+        const sanitizedName = downloadedFile.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+        const storagePath = `${course.id}/${Date.now()}_${sanitizedName}`;
+
+        await uploadLargeFile('course-assets', storagePath, downloadedFile, (pct) => {
+          setUploadProgress(50 + Math.round(pct * 0.5)); // 50–100% = העלאה
+          setStatusMsg(`מעלה לשרת... ${pct}%`);
+        });
+
+        const { error: assetError } = await (supabase.from('course_assets') as any).insert({
+          course_id: course.id,
+          file_type: ext,
+          storage_path: storagePath,
+          original_name: downloadedFile.name,
+          size_bytes: downloadedFile.size,
+          status: 'uploaded',
+        });
+        if (assetError) throw assetError;
+
+        handleClose();
+        router.push(`/course/${course.id}/builder`);
+        triggerConvert(course.id, session);
+
       } else if ((sourceType === 'google_drive' || sourceType === 'canva') && sourceUrl.trim()) {
+        // === Google Drive / Canva: דרך Edge Function ===
+        setStatusMsg('מוריד קובץ מהקישור...');
+        toast.info('מוריד קובץ מהקישור...');
+
         const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
         const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-        toast.info('מוריד קובץ מהקישור...');
 
         const fetchResp = await fetch(`${supabaseUrl}/functions/v1/fetch-external-file`, {
           method: 'POST',
@@ -190,12 +434,15 @@ export function CreateCourseDialog() {
       toast.error('שגיאה: ' + error.message);
     } finally {
       setLoading(false);
+      setStatusMsg('');
     }
   };
 
   const setSetting = <K extends keyof CourseSettings>(key: K, val: CourseSettings[K]) => {
     setSettings(prev => ({ ...prev, [key]: val }));
   };
+
+  const isUrlSource = sourceType === 'google_drive' || sourceType === 'canva' || sourceType === 'onedrive';
 
   return (
     <>
@@ -240,17 +487,18 @@ export function CreateCourseDialog() {
 
                   <div className="space-y-3">
                     <Label className="text-sm font-semibold text-slate-700">מקור המצגת</Label>
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-4 gap-2">
                       {([
                         { key: 'upload' as const, label: 'העלאת קובץ', icon: Upload },
                         { key: 'google_drive' as const, label: 'Google Drive', icon: Cloud },
+                        { key: 'onedrive' as const, label: 'OneDrive', icon: Cloud },
                         { key: 'canva' as const, label: 'Canva', icon: Link2 },
                       ]).map(({ key, label, icon: Icon }) => (
                         <button
                           key={key}
                           onClick={() => setSourceType(key)}
                           className={cn(
-                            'flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all text-sm font-medium',
+                            'flex flex-col items-center gap-2 p-3 rounded-xl border-2 transition-all text-xs font-medium',
                             sourceType === key
                               ? 'border-blue-600 bg-blue-50 text-blue-700'
                               : 'border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'
@@ -287,7 +535,7 @@ export function CreateCourseDialog() {
                           <input {...getInputProps()} />
                           <Upload className="h-10 w-10 text-slate-400 mx-auto mb-3" />
                           <p className="font-semibold text-slate-700 mb-1">גרור קובץ לכאן או לחץ להעלאה</p>
-                          <p className="text-sm text-slate-500">PDF, PPTX, PPT, DOCX – עד 50MB</p>
+                          <p className="text-sm text-slate-500">PDF, PPTX, PPT, DOCX – עד 500MB</p>
                         </div>
                       )}
                       <div className="flex items-start gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
@@ -300,33 +548,53 @@ export function CreateCourseDialog() {
                   ) : (
                     <div className="space-y-3">
                       <Label className="text-sm font-semibold text-slate-700">
-                        {sourceType === 'google_drive' ? 'קישור Google Drive' : 'קישור Canva'}
+                        {sourceType === 'google_drive' ? 'קישור Google Drive' :
+                          sourceType === 'onedrive' ? 'קישור OneDrive' : 'קישור Canva'}
                       </Label>
                       <Input
                         value={sourceUrl}
-                        onChange={e => setSourceUrl(e.target.value)}
-                        placeholder={sourceType === 'google_drive' ? 'https://drive.google.com/file/d/...' : 'https://www.canva.com/...'}
+                        onChange={e => handleUrlChange(e.target.value)}
+                        placeholder={
+                          sourceType === 'google_drive' ? 'https://drive.google.com/file/d/...' :
+                          sourceType === 'onedrive' ? 'https://1drv.ms/... או https://onedrive.live.com/...' :
+                          'https://www.canva.com/...'
+                        }
                         dir="ltr"
                         className="h-11 text-sm font-mono"
                       />
+
+                      {/* הנחיות לפי סוג */}
+                      {sourceType === 'onedrive' && (
+                        <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-1.5">
+                          <p className="text-xs font-semibold text-blue-800">כיצד לשתף קובץ מ-OneDrive:</p>
+                          <ol className="text-xs text-blue-700 space-y-1 list-decimal list-inside">
+                            <li>לחץ על הקובץ ב-OneDrive ← שתף</li>
+                            <li>שנה ל: <strong>כל מי שיש לו קישור יכול להציג</strong></li>
+                            <li>לחץ על <strong>העתק קישור</strong> והדבק כאן</li>
+                          </ol>
+                          <p className="text-xs text-blue-600 mt-1">⚡ הקובץ יורד ישירות דרך הדפדפן — ללא מגבלות שרת</p>
+                        </div>
+                      )}
+
                       {sourceType === 'google_drive' && (
                         <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-1.5">
                           <p className="text-xs font-semibold text-blue-800">כיצד לשתף קובץ מ-Google Drive:</p>
                           <ol className="text-xs text-blue-700 space-y-1 list-decimal list-inside">
-                            <li>לחץ על הקובץ ב-Google Drive &lt; שתף</li>
+                            <li>לחץ על הקובץ ב-Google Drive ← שתף</li>
                             <li>שנה ל: <strong>כל מי שיש לו קישור יכול להציג</strong></li>
                             <li>העתק את הקישור והדבק כאן</li>
                           </ol>
                           <p className="text-xs text-blue-600 mt-1">תומך ב: PPTX, PDF, DOCX</p>
                         </div>
                       )}
+
                       {sourceType === 'canva' && (
                         <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg space-y-1.5">
                           <p className="text-xs font-semibold text-blue-800">כיצד לייצא מ-Canva:</p>
                           <ol className="text-xs text-blue-700 space-y-1 list-decimal list-inside">
-                            <li>ב-Canva לחץ על שתף &lt; הורד</li>
+                            <li>ב-Canva לחץ על שתף ← הורד</li>
                             <li>בחר פורמט PDF או PPTX</li>
-                            <li>לחלופין: שתף &lt; אפשר צפייה &lt; העתק קישור</li>
+                            <li>לחלופין: שתף ← אפשר צפייה ← העתק קישור</li>
                           </ol>
                         </div>
                       )}
@@ -399,14 +667,24 @@ export function CreateCourseDialog() {
                     <ChevronRight className="h-4 w-4" />
                     חזור
                   </Button>
-                  <Button
-                    onClick={handleCreate}
-                    disabled={loading}
-                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white gap-2"
-                  >
-                    {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-                    {loading ? 'יוצר קורס...' : 'צור קורס'}
-                  </Button>
+                  <div className="flex-1 flex flex-col gap-2">
+                    {loading && uploadProgress > 0 && uploadProgress < 100 && (
+                      <div className="space-y-1">
+                        <Progress value={uploadProgress} className="h-2" />
+                        <p className="text-xs text-slate-500 text-center">
+                          {statusMsg || `${uploadProgress}%`}
+                        </p>
+                      </div>
+                    )}
+                    <Button
+                      onClick={handleCreate}
+                      disabled={loading}
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white gap-2"
+                    >
+                      {loading && <Loader2 className="h-4 w-4 animate-spin" />}
+                      {loading ? (statusMsg || 'יוצר קורס...') : 'צור קורס'}
+                    </Button>
+                  </div>
                 </>
               )}
             </div>

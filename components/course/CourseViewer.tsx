@@ -6,8 +6,10 @@ import { Database } from '@/types/database.types';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { QuestionBlock } from './QuestionBlock';
+import { VideoLesson } from './VideoLesson';
+import { PdfPageViewer } from './PdfPageViewer';
 import { Progress } from '@/components/ui/progress';
-import { CheckCircle, ChevronRight, ChevronLeft, BookOpen, List } from 'lucide-react';
+import { CircleCheck as CheckCircle, ChevronRight, ChevronLeft, BookOpen, List, Video, FileText, Presentation, ClipboardList } from 'lucide-react';
 
 type Section = Database['public']['Tables']['course_sections']['Row'];
 type Page = Database['public']['Tables']['course_pages']['Row'];
@@ -17,6 +19,81 @@ interface CourseViewerProps {
   courseId: string;
   attemptId?: string;
   isPreview?: boolean;
+}
+
+function PageTypeIcon({ type }: { type: string }) {
+  switch (type) {
+    case 'video':
+      return <Video className="h-3.5 w-3.5 text-sky-500 flex-shrink-0" />;
+    case 'pdf':
+      return <FileText className="h-3.5 w-3.5 text-orange-500 flex-shrink-0" />;
+    case 'pptx_slide':
+      return <Presentation className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0" />;
+    case 'quiz':
+      return <ClipboardList className="h-3.5 w-3.5 text-violet-500 flex-shrink-0" />;
+    default:
+      return <BookOpen className="h-3.5 w-3.5 text-slate-400 flex-shrink-0" />;
+  }
+}
+
+function PageContent({ page }: { page: Page }) {
+  if (page.page_type === 'video') {
+    if (!page.video_storage_path) {
+      return (
+        <div className="p-8 text-center text-slate-500">
+          <Video className="h-10 w-10 mx-auto mb-3 text-slate-300" />
+          <p>נתיב הסרטון אינו זמין</p>
+        </div>
+      );
+    }
+    return (
+      <div className="p-6">
+        <VideoLesson storagePath={page.video_storage_path} title={page.title} />
+        {page.html_content && page.html_content.trim().length > 0 && (
+          <div
+            dangerouslySetInnerHTML={{ __html: page.html_content }}
+            className="mt-6 prose prose-slate max-w-none"
+          />
+        )}
+      </div>
+    );
+  }
+
+  if (page.page_type === 'pdf') {
+    if (!page.asset_id && !page.video_storage_path) {
+      return (
+        <div
+          dangerouslySetInnerHTML={{ __html: page.html_content }}
+          className="p-6 sm:p-8 prose prose-slate max-w-none"
+        />
+      );
+    }
+    const storagePath = (page as any).pdf_storage_path || page.video_storage_path;
+    if (!storagePath) {
+      return (
+        <div
+          dangerouslySetInnerHTML={{ __html: page.html_content }}
+          className="p-6 sm:p-8 prose prose-slate max-w-none"
+        />
+      );
+    }
+    return (
+      <div className="p-6">
+        <PdfPageViewer
+          storagePath={storagePath}
+          pageNum={page.pdf_page_num}
+          title={page.title}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      dangerouslySetInnerHTML={{ __html: page.html_content }}
+      className="p-6 sm:p-8 prose prose-slate max-w-none"
+    />
+  );
 }
 
 export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseViewerProps) {
@@ -135,6 +212,18 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
             <span className="mx-1">מתוך</span>
             <span>{pages.length}</span>
           </div>
+          {currentPage && (
+            <div className="hidden sm:flex items-center gap-1.5">
+              <PageTypeIcon type={currentPage.page_type || 'text'} />
+              <span className="text-xs text-slate-500">
+                {currentPage.page_type === 'video' && 'סרטון'}
+                {currentPage.page_type === 'pdf' && 'PDF'}
+                {currentPage.page_type === 'pptx_slide' && 'שקופית'}
+                {currentPage.page_type === 'quiz' && 'שאלון'}
+                {(!currentPage.page_type || currentPage.page_type === 'text') && 'תוכן'}
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -192,6 +281,7 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
               const isActive = index === currentPageIndex;
               const pageQs = questions.filter((q) => q.page_id === page.id);
               const answeredAll = pageQs.length > 0 && pageQs.every((q) => answers[q.id]);
+              const label = page.title || section?.title || `עמוד ${index + 1}`;
 
               return (
                 <button
@@ -203,10 +293,11 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
                       : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                   }`}
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="truncate">{section?.title || `עמוד ${index + 1}`}</span>
+                  <div className="flex items-center justify-between gap-2">
+                    <PageTypeIcon type={page.page_type || 'text'} />
+                    <span className="flex-1 truncate text-right">{label}</span>
                     {answeredAll && (
-                      <CheckCircle className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0 mr-2" />
+                      <CheckCircle className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0" />
                     )}
                   </div>
                 </button>
@@ -219,10 +310,14 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
           {currentPage && (
             <>
               <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                <div
-                  dangerouslySetInnerHTML={{ __html: currentPage.html_content }}
-                  className="p-6 sm:p-8 prose prose-slate max-w-none"
-                />
+                {currentSection?.title && (
+                  <div className="px-6 pt-5 pb-0">
+                    <p className="text-xs font-semibold text-sky-600 uppercase tracking-wide">
+                      {currentSection.title}
+                    </p>
+                  </div>
+                )}
+                <PageContent page={currentPage} />
               </div>
 
               {pageQuestions.length > 0 && (
