@@ -18,7 +18,7 @@ const fastify = Fastify({
 
 async function bootstrap() {
   await fastify.register(cors, {
-    origin: ALLOWED_ORIGINS.includes('*') ? true : ALLOWED_ORIGINS,
+    origin: '*',
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Api-Key'],
   });
