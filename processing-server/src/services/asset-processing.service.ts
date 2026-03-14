@@ -173,13 +173,41 @@ export async function processJobById(
       let sectionOffset = 0;
       let pageOffset = 0;
 
+      const VIDEO_TYPES = new Set(['mp4', 'mpeg', 'mov', 'avi', 'webm', 'mkv', 'm4v']);
+
       for (const asset of assets) {
-        const assetResult = await processAsset(supabase, {
-          assetId: asset.id,
-          courseId: job.course_id,
-          jobId,
-          clearExisting: false,
-        });
+        const assetRecord = asset as AssetRecord;
+        const fileType = (assetRecord.file_type || '').toLowerCase();
+        const category = detectFileCategory(fileType);
+
+        await supabase
+          .from('course_assets')
+          .update({ status: 'processing' })
+          .eq('id', asset.id);
+
+        let assetResult: ProcessingResult;
+
+        if (category === 'video' || VIDEO_TYPES.has(fileType)) {
+          logger.info({ assetId: asset.id }, '[ORCHESTRATOR] Processing video asset');
+          assetResult = await processVideo(
+            assetRecord.storage_path,
+            asset.id,
+            assetRecord.original_name,
+            (msg) => logger.info({ msg }, '[PROGRESS]')
+          );
+        } else {
+          const buffer = await downloadAsset(supabase, assetRecord.storage_path);
+          if (category === 'pptx') {
+            assetResult = await processPptx(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'));
+          } else if (category === 'pdf') {
+            assetResult = await processPdf(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'));
+          } else if (category === 'docx') {
+            assetResult = await processDocx(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'));
+          } else {
+            logger.warn({ assetId: asset.id, fileType }, '[ORCHESTRATOR] Unsupported file type, skipping');
+            continue;
+          }
+        }
 
         const adjustedSections = assetResult.sections.map((s) => ({
           ...s,
@@ -204,7 +232,18 @@ export async function processJobById(
 
         sectionOffset += assetResult.sections.length;
         pageOffset += assetResult.pages.length;
+
+        await supabase
+          .from('course_assets')
+          .update({ status: 'processed' })
+          .eq('id', asset.id);
       }
+
+      await writeCourse(supabase, combinedResult, {
+        courseId: job.course_id,
+        jobId,
+        clearExisting: true,
+      });
 
       result = combinedResult;
     }
