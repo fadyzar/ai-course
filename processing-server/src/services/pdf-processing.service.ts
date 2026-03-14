@@ -45,8 +45,9 @@ export async function processPdf(
   let pageCount = 1;
 
   try {
-    const pdfParse = await import('pdf-parse/lib/pdf-parse.js');
-    const data = await pdfParse.default(buffer);
+    const pdfParseModule = await import('pdf-parse');
+    const pdfParse = pdfParseModule.default || pdfParseModule;
+    const data = await pdfParse(buffer);
     pageCount = data.numpages || 1;
 
     const rawText = data.text || '';
