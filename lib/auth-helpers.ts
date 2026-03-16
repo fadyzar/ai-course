@@ -17,6 +17,7 @@ export interface AuthResponse {
   success: boolean;
   error?: string;
   userId?: string;
+  needsEmailConfirmation?: boolean;
 }
 
 export async function signUpUser(data: SignUpData): Promise<AuthResponse> {
@@ -35,76 +36,23 @@ export async function signUpUser(data: SignUpData): Promise<AuthResponse> {
     });
 
     if (authError) {
-      if (authError.message?.toLowerCase().includes('already registered') || authError.status === 422) {
-        return { success: false, error: 'כתובת האימייל כבר רשומה במערכת. נסה להתחבר.' };
-      }
-      if (authError.status === 500) {
-        const existing = await supabase.auth.signInWithPassword({ email, password });
-        if (!existing.error && existing.data.user) {
-          return { success: true, userId: existing.data.user.id };
-        }
+      if (authError.status === 422 || authError.message?.toLowerCase().includes('already registered')) {
         return { success: false, error: 'כתובת האימייל כבר רשומה במערכת. נסה להתחבר.' };
       }
       return { success: false, error: authError.message };
     }
 
     if (!authData.user) {
-      return { success: false, error: 'Failed to create user' };
+      return { success: false, error: 'שגיאה ביצירת המשתמש' };
     }
 
     const userId = authData.user.id;
 
     if (!authData.session) {
-      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
-      if (signInError) {
-        return { success: false, error: signInError.message };
-      }
+      return { success: true, userId, needsEmailConfirmation: true };
     }
 
-    let schoolId: string | null = null;
-
-    if (role === 'teacher' && schoolName) {
-      const { data: schoolData, error: schoolError } = await (supabase as any)
-        .from('schools')
-        .insert([{
-          name: schoolName,
-          owner_id: userId,
-        }])
-        .select()
-        .maybeSingle();
-
-      if (schoolError) {
-        console.error('Error creating school:', schoolError);
-      } else {
-        schoolId = schoolData?.id || null;
-      }
-    } else if (role === 'student' && courseCode) {
-      const { data: shareData, error: shareError } = await (supabase as any)
-        .from('shares')
-        .select('course_id, courses(school_id)')
-        .eq('share_token', courseCode)
-        .maybeSingle();
-
-      if (!shareError && shareData) {
-        schoolId = (shareData as any)?.courses?.school_id || null;
-      }
-    }
-
-    const { error: profileError } = await (supabase as any).from('profiles').upsert([{
-      id: userId,
-      role: role,
-      full_name: fullName,
-      email: email,
-      phone: phone || null,
-      bio: bio || null,
-      school_id: schoolId,
-      is_active: true,
-      last_login_at: new Date().toISOString(),
-    }]);
-
-    if (profileError) {
-      console.error('Error creating profile:', profileError);
-    }
+    await updateProfileAfterSignup({ userId, role, fullName, email, phone, bio, schoolName, courseCode });
 
     return { success: true, userId };
   } catch (error: any) {
@@ -113,14 +61,59 @@ export async function signUpUser(data: SignUpData): Promise<AuthResponse> {
   }
 }
 
+async function updateProfileAfterSignup({
+  userId, role, fullName, email, phone, bio, schoolName, courseCode,
+}: {
+  userId: string;
+  role: UserRole;
+  fullName: string;
+  email: string;
+  phone?: string;
+  bio?: string;
+  schoolName?: string;
+  courseCode?: string;
+}) {
+  let schoolId: string | null = null;
+
+  if (role === 'teacher' && schoolName) {
+    const { data: schoolData } = await (supabase as any)
+      .from('schools')
+      .insert([{ name: schoolName, owner_id: userId }])
+      .select()
+      .maybeSingle();
+    schoolId = schoolData?.id || null;
+  } else if (role === 'student' && courseCode) {
+    const { data: shareData } = await (supabase as any)
+      .from('shares')
+      .select('course_id, courses(school_id)')
+      .eq('share_token', courseCode)
+      .maybeSingle();
+    if (shareData) {
+      schoolId = (shareData as any)?.courses?.school_id || null;
+    }
+  }
+
+  await (supabase as any).from('profiles').upsert([{
+    id: userId,
+    role,
+    full_name: fullName,
+    email,
+    phone: phone || null,
+    bio: bio || null,
+    school_id: schoolId,
+    is_active: true,
+    last_login_at: new Date().toISOString(),
+  }]);
+}
+
 export async function signInUser(email: string, password: string): Promise<AuthResponse> {
   try {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
     if (error) {
+      if (error.message?.toLowerCase().includes('email not confirmed')) {
+        return { success: false, error: 'יש לאשר את כתובת האימייל לפני ההתחברות. בדוק את תיבת הדואר שלך.' };
+      }
       return { success: false, error: error.message };
     }
 

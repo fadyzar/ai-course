@@ -14,17 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import {
-  BookOpen,
-  Users,
-  BarChart3,
-  Globe,
-  Download,
-  Mail,
-  Phone,
-  GraduationCap,
-  Loader2
-} from 'lucide-react';
+import { BookOpen, Users, ChartBar as BarChart3, Globe, Download, Mail, Phone, GraduationCap, Loader as Loader2 } from 'lucide-react';
 import { signUpUser } from '@/lib/auth-helpers';
 import { toast } from 'sonner';
 
@@ -71,8 +61,13 @@ export default function TeacherRegister() {
       });
 
       if (result.success) {
-        toast.success('הרישום הושלם בהצלחה!');
-        router.push('/dashboard');
+        if (result.needsEmailConfirmation) {
+          toast.success('הרישום הושלם! אנא אשר את כתובת האימייל שלך ואז התחבר.');
+          router.push('/auth/login');
+        } else {
+          toast.success('הרישום הושלם בהצלחה!');
+          router.push('/dashboard');
+        }
       } else {
         toast.error(result.error || 'שגיאה ברישום');
       }

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Download, UserCircle, BookOpen, Trophy, Bell, Loader2 } from 'lucide-react';
+import { Download, CircleUser as UserCircle, BookOpen, Trophy, Bell, Loader as Loader2 } from 'lucide-react';
 import { useState } from 'react';
 import { signUpUser } from '@/lib/auth-helpers';
 import { toast } from 'sonner';
@@ -47,8 +47,13 @@ export default function StudentRegisterPage() {
       });
 
       if (result.success) {
-        toast.success('הרישום הושלם בהצלחה!');
-        router.push('/dashboard');
+        if (result.needsEmailConfirmation) {
+          toast.success('הרישום הושלם! אנא אשר את כתובת האימייל שלך ואז התחבר.');
+          router.push('/auth/login');
+        } else {
+          toast.success('הרישום הושלם בהצלחה!');
+          router.push('/dashboard');
+        }
       } else {
         toast.error(result.error || 'שגיאה ברישום');
       }
