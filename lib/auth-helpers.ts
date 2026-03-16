@@ -35,6 +35,16 @@ export async function signUpUser(data: SignUpData): Promise<AuthResponse> {
     });
 
     if (authError) {
+      if (authError.message?.toLowerCase().includes('already registered') || authError.status === 422) {
+        return { success: false, error: 'כתובת האימייל כבר רשומה במערכת. נסה להתחבר.' };
+      }
+      if (authError.status === 500) {
+        const existing = await supabase.auth.signInWithPassword({ email, password });
+        if (!existing.error && existing.data.user) {
+          return { success: true, userId: existing.data.user.id };
+        }
+        return { success: false, error: 'כתובת האימייל כבר רשומה במערכת. נסה להתחבר.' };
+      }
       return { success: false, error: authError.message };
     }
 
@@ -43,6 +53,13 @@ export async function signUpUser(data: SignUpData): Promise<AuthResponse> {
     }
 
     const userId = authData.user.id;
+
+    if (!authData.session) {
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+      if (signInError) {
+        return { success: false, error: signInError.message };
+      }
+    }
 
     let schoolId: string | null = null;
 
@@ -58,10 +75,9 @@ export async function signUpUser(data: SignUpData): Promise<AuthResponse> {
 
       if (schoolError) {
         console.error('Error creating school:', schoolError);
-        return { success: false, error: 'Failed to create school' };
+      } else {
+        schoolId = schoolData?.id || null;
       }
-
-      schoolId = schoolData?.id || null;
     } else if (role === 'student' && courseCode) {
       const { data: shareData, error: shareError } = await (supabase as any)
         .from('shares')
@@ -88,7 +104,6 @@ export async function signUpUser(data: SignUpData): Promise<AuthResponse> {
 
     if (profileError) {
       console.error('Error creating profile:', profileError);
-      return { success: false, error: 'Failed to create user profile' };
     }
 
     return { success: true, userId };
