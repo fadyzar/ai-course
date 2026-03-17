@@ -162,7 +162,7 @@ export async function processAsset(
         if (jobId) {
           await supabase.from('processing_logs').insert({ job_id: jobId, level: 'info', message: msg });
         }
-      });
+      }, assetRecord.storage_path);
     } else if (category === 'docx') {
       result = await processDocx(buffer, assetId, assetRecord.original_name, onProgress);
     } else {
@@ -298,7 +298,7 @@ export async function processJobById(
         } else {
           const buffer = await downloadAsset(supabase, assetRecord.storage_path);
           if (category === 'pdf') {
-            assetResult = await processPdf(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'));
+            assetResult = await processPdf(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'), assetRecord.storage_path);
           } else if (category === 'docx') {
             assetResult = await processDocx(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'));
           } else {

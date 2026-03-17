@@ -30,7 +30,8 @@ export async function processPdf(
   buffer: Buffer,
   assetId: string,
   originalName: string,
-  onProgress?: (message: string) => void
+  onProgress?: (message: string) => void,
+  storagePath?: string
 ): Promise<ProcessingResult> {
   const log = (msg: string) => {
     logger.info({ assetId, msg }, '[PDF]');
@@ -104,6 +105,9 @@ export async function processPdf(
     htmlContent: buildPageHtml(idx + 1, totalPages, text),
     assetId,
     pdfPageNum: idx + 1,
+    // storagePath enables PdfPageViewer (pdf.js) in the browser — shows the real PDF page
+    // including all images, diagrams, and formatting from the original file.
+    videoStoragePath: storagePath,
     sourceRefs: { pageNumber: idx + 1, ai: false },
   }));
 
