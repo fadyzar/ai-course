@@ -816,6 +816,17 @@ Deno.serve(async (req: Request) => {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
+  // If a dedicated processing server is configured, this worker must not run.
+  // The server claims jobs atomically — worker running in parallel causes data races.
+  const processingServerUrl = Deno.env.get("PROCESSING_SERVER_URL");
+  if (processingServerUrl) {
+    console.log(`[WORKER] Dedicated processing server configured (${processingServerUrl}) — worker disabled`);
+    return new Response(
+      JSON.stringify({ skipped: true, reason: "dedicated processing server configured", server: processingServerUrl }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
