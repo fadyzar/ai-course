@@ -25,4 +25,4 @@ ENV HOST=0.0.0.0
 
 EXPOSE 3100
 
-CMD ["node", "dist/server.js"]
+CMD ["node", "--max-old-space-size=400", "dist/server.js"]

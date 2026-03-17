@@ -153,6 +153,7 @@ export default function CourseBuilderPage() {
   };
 
   const handleStartProcessing = async () => {
+    if (isProcessing) return; // prevent double-click
     try {
       const currentAssets = assets.length > 0 ? assets : (await supabase
         .from('course_assets')
