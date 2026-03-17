@@ -1,4 +1,4 @@
-import JSZip from 'jszip';
+import * as unzipper from 'unzipper';
 import { SupabaseClient } from '@supabase/supabase-js';
 import {
   ProcessingResult,
@@ -14,7 +14,7 @@ import { logger } from '../utils/logger.js';
 const YOUTUBE_PATTERN = /(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([A-Za-z0-9_-]{11})/;
 const VIMEO_PATTERN = /vimeo\.com\/(\d+)/;
 
-// ─── Text extraction ──────────────────────────────────────────────────────────
+// ─── Text helpers ─────────────────────────────────────────────────────────────
 
 function extractTextFromXml(xml: string): string {
   const matches = xml.match(/<a:t[^>]*>([^<]*)<\/a:t>/g) || [];
@@ -53,114 +53,100 @@ function escapeHtml(str: string): string {
     .replace(/"/g, '&quot;');
 }
 
-// ─── Relationships ────────────────────────────────────────────────────────────
-
-async function parseSlideRelationships(
-  zip: JSZip,
-  slideFile: string
-): Promise<SlideRelationship[]> {
-  const relsPath = slideFile.replace(
-    /ppt\/slides\/(slide\d+\.xml)/,
-    'ppt/slides/_rels/$1.rels'
-  );
-
-  const relsFile = zip.files[relsPath];
-  if (!relsFile) return [];
-
-  const relsXml = await relsFile.async('text');
-  const relationships: SlideRelationship[] = [];
-
-  const relMatches = relsXml.matchAll(
-    /<Relationship[^>]+Id="([^"]+)"[^>]+Type="([^"]+)"[^>]+Target="([^"]+)"[^>]*\/?>/g
-  );
-
-  for (const match of relMatches) {
-    const [, rId, type, target] = match;
-    if (type.includes('/image')) {
-      relationships.push({ type: 'image', target, rId });
-    } else if (type.includes('/video')) {
-      relationships.push({ type: 'video', target, rId });
-    } else if (type.includes('/hyperlink')) {
-      relationships.push({ type: 'hyperlink', target, rId });
-    } else {
-      relationships.push({ type: 'other', target, rId });
-    }
-  }
-
-  return relationships;
+function mimeFromPath(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase() || '';
+  const map: Record<string, string> = {
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    gif: 'image/gif', svg: 'image/svg+xml', webp: 'image/webp',
+    mp4: 'video/mp4', mov: 'video/quicktime', avi: 'video/x-msvideo',
+    webm: 'video/webm', wmv: 'video/x-ms-wmv',
+  };
+  return map[ext] || 'application/octet-stream';
 }
 
-// ─── Media upload ─────────────────────────────────────────────────────────────
+// ─── ZIP reading — uses unzipper to avoid loading full file into RAM ──────────
 
-async function uploadMediaToStorage(
+async function readZipEntries(filePath: string): Promise<Map<string, Buffer>> {
+  const directory = await unzipper.Open.file(filePath);
+  const entries = new Map<string, Buffer>();
+
+  // Only load XML files (slides + rels) — these are tiny (KB not MB)
+  // Media files are handled separately via streaming upload
+  const xmlEntries = directory.files.filter(
+    (f) =>
+      f.path.match(/^ppt\/slides\/slide\d+\.xml$/) ||
+      f.path.match(/^ppt\/slides\/_rels\/slide\d+\.xml\.rels$/)
+  );
+
+  for (const entry of xmlEntries) {
+    const buf = await entry.buffer();
+    entries.set(entry.path, buf);
+  }
+
+  return entries;
+}
+
+async function uploadMediaEntry(
+  filePath: string,
+  zipEntryPath: string,
   supabase: SupabaseClient,
-  zip: JSZip,
-  zipPath: string,
   storagePath: string,
   mimeType: string
 ): Promise<string | null> {
   try {
-    const zipEntry = zip.files[zipPath];
-    if (!zipEntry) return null;
+    const directory = await unzipper.Open.file(filePath);
+    const entry = directory.files.find((f) => f.path === zipEntryPath);
+    if (!entry) return null;
 
-    const bytes = await zipEntry.async('uint8array');
+    // Buffer only this one entry (typically 50KB–2MB, not the whole 271MB)
+    const bytes = await entry.buffer();
 
     const { error } = await supabase.storage
       .from('course-assets')
       .upload(storagePath, bytes, { contentType: mimeType, upsert: true });
 
     if (error) {
-      logger.warn({ zipPath, err: error.message }, '[PPTX] Media upload failed');
+      logger.warn({ zipEntryPath, err: error.message }, '[PPTX] Media upload failed');
       return null;
     }
 
     const { data } = supabase.storage.from('course-assets').getPublicUrl(storagePath);
     return data.publicUrl;
   } catch (err: any) {
-    logger.warn({ zipPath, err: err.message }, '[PPTX] Media upload error');
+    logger.warn({ zipEntryPath, err: err.message }, '[PPTX] Media upload error');
     return null;
   }
 }
 
-function resolveMediaPath(slideFile: string, target: string): string {
-  // target like "../media/image1.png" → "ppt/media/image1.png"
+// ─── Relationship parsing ─────────────────────────────────────────────────────
+
+function parseRelationships(relsXml: string): SlideRelationship[] {
+  const relationships: SlideRelationship[] = [];
+  const relMatches = relsXml.matchAll(
+    /<Relationship[^>]+Id="([^"]+)"[^>]+Type="([^"]+)"[^>]+Target="([^"]+)"[^>]*\/?>/g
+  );
+  for (const match of relMatches) {
+    const [, rId, type, target] = match;
+    if (type.includes('/image')) relationships.push({ type: 'image', target, rId });
+    else if (type.includes('/video')) relationships.push({ type: 'video', target, rId });
+    else if (type.includes('/hyperlink')) relationships.push({ type: 'hyperlink', target, rId });
+    else relationships.push({ type: 'other', target, rId });
+  }
+  return relationships;
+}
+
+function resolveMediaZipPath(slideFile: string, target: string): string {
   const cleaned = target.replace(/^\.\.\//, 'ppt/');
   if (cleaned.startsWith('ppt/')) return cleaned;
-  // fallback: relative to slide directory
   const slideDir = slideFile.replace(/[^/]+$/, '');
   return slideDir + target.replace(/^\.\.\//, '');
 }
 
-function mimeFromPath(filePath: string): string {
-  const ext = filePath.split('.').pop()?.toLowerCase() || '';
-  const map: Record<string, string> = {
-    png: 'image/png',
-    jpg: 'image/jpeg',
-    jpeg: 'image/jpeg',
-    gif: 'image/gif',
-    svg: 'image/svg+xml',
-    webp: 'image/webp',
-    mp4: 'video/mp4',
-    mov: 'video/quicktime',
-    avi: 'video/x-msvideo',
-    webm: 'video/webm',
-    wmv: 'video/x-ms-wmv',
-  };
-  return map[ext] || 'application/octet-stream';
-}
-
 // ─── HTML builder ─────────────────────────────────────────────────────────────
 
-function buildSlideHtml(
-  slide: SlideData & { imageUrls?: string[]; videoStoragePath?: string; aiSummary?: string },
-  totalSlides: number
-): string {
-  const escapedText = escapeHtml(sanitizeText(slide.text));
-  const displayText = slide.aiSummary
-    ? escapeHtml(sanitizeText(slide.aiSummary))
-    : escapedText;
+function buildSlideHtml(slide: SlideData, totalSlides: number): string {
+  const displayText = escapeHtml(sanitizeText(slide.aiSummary || slide.text));
 
-  // ── Video slide (YouTube / Vimeo embed) ──
   if (slide.externalVideoUrl) {
     const videoIdMatch = slide.externalVideoUrl.match(
       /(?:youtu\.be\/|watch\?v=|embed\/)([A-Za-z0-9_-]{11})/
@@ -168,48 +154,37 @@ function buildSlideHtml(
     const isYoutube =
       slide.externalVideoUrl.includes('youtube.com') ||
       slide.externalVideoUrl.includes('youtu.be');
-    const embedUrl =
-      isYoutube && videoIdMatch
-        ? `https://www.youtube.com/embed/${videoIdMatch[1]}`
-        : slide.externalVideoUrl.includes('vimeo.com')
-        ? slide.externalVideoUrl.replace('vimeo.com/', 'player.vimeo.com/video/')
-        : slide.externalVideoUrl;
+    const embedUrl = isYoutube && videoIdMatch
+      ? `https://www.youtube.com/embed/${videoIdMatch[1]}`
+      : slide.externalVideoUrl.includes('vimeo.com')
+      ? `https://player.vimeo.com/video/${slide.externalVideoUrl.split('vimeo.com/')[1]}`
+      : slide.externalVideoUrl;
 
     return `<div dir="rtl" class="max-w-4xl mx-auto space-y-6 py-4">
-  <div class="border-b border-slate-200 pb-3">
-    <div class="flex items-center justify-between">
-      <h2 class="text-2xl font-bold text-slate-900">שקופית ${slide.index}</h2>
-      <span class="text-sm text-slate-400">שקופית ${slide.index} מתוך ${totalSlides}</span>
-    </div>
+  <div class="border-b border-slate-200 pb-3 flex items-center justify-between">
+    <h2 class="text-2xl font-bold text-slate-900">שקופית ${slide.index}</h2>
+    <span class="text-sm text-slate-400">${slide.index} / ${totalSlides}</span>
   </div>
   <div class="aspect-video w-full rounded-xl overflow-hidden shadow-lg">
-    <iframe
-      src="${embedUrl}"
-      class="w-full h-full"
-      frameborder="0"
+    <iframe src="${embedUrl}" class="w-full h-full" frameborder="0"
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-      allowfullscreen
-    ></iframe>
+      allowfullscreen></iframe>
   </div>
-  ${slide.text ? `<div class="bg-slate-50 p-4 rounded-xl border border-slate-200">
+  ${displayText ? `<div class="bg-slate-50 p-4 rounded-xl border border-slate-200">
     <p class="text-slate-700 leading-relaxed text-sm">${displayText}</p>
   </div>` : ''}
 </div>`;
   }
 
-  // ── Video slide (embedded video from Storage) ──
   if (slide.videoStoragePath) {
     return `<div dir="rtl" class="max-w-4xl mx-auto space-y-6 py-4">
-  <div class="border-b border-slate-200 pb-3">
-    <div class="flex items-center justify-between">
-      <h2 class="text-2xl font-bold text-slate-900">שקופית ${slide.index}</h2>
-      <span class="text-sm text-slate-400">שקופית ${slide.index} מתוך ${totalSlides}</span>
-    </div>
+  <div class="border-b border-slate-200 pb-3 flex items-center justify-between">
+    <h2 class="text-2xl font-bold text-slate-900">שקופית ${slide.index}</h2>
+    <span class="text-sm text-slate-400">${slide.index} / ${totalSlides}</span>
   </div>
   <div class="aspect-video w-full rounded-xl overflow-hidden shadow-lg bg-black">
     <video controls class="w-full h-full" preload="metadata">
       <source src="${slide.videoStoragePath}" />
-      הדפדפן שלך אינו תומך בתגית וידאו.
     </video>
   </div>
   ${displayText ? `<div class="bg-slate-50 p-4 rounded-xl border border-slate-200">
@@ -218,9 +193,8 @@ function buildSlideHtml(
 </div>`;
   }
 
-  // ── Chapter slide ──
   if (slide.isChapterSlide) {
-    return `<div dir="rtl" class="max-w-4xl mx-auto space-y-6 py-4">
+    return `<div dir="rtl" class="max-w-4xl mx-auto py-4">
   <div class="flex items-center justify-center min-h-[40vh]">
     <div class="text-center space-y-4">
       <div class="inline-flex items-center justify-center w-16 h-16 bg-blue-100 rounded-2xl mb-4">
@@ -232,27 +206,21 @@ function buildSlideHtml(
 </div>`;
   }
 
-  // ── Regular slide with optional images ──
   const imageHtml = (slide.imageUrls || [])
-    .map(
-      (url) =>
-        `  <div class="rounded-xl overflow-hidden border border-slate-200 shadow-sm">
+    .map((url) => `<div class="rounded-xl overflow-hidden border border-slate-200 shadow-sm">
     <img src="${url}" alt="תמונה מהשקופית" class="w-full h-auto max-h-96 object-contain bg-slate-50" loading="lazy" />
-  </div>`
-    )
+  </div>`)
     .join('\n');
 
   return `<div dir="rtl" class="max-w-4xl mx-auto space-y-6 py-4">
-  <div class="border-b border-slate-200 pb-3">
-    <div class="flex items-center justify-between">
-      <h2 class="text-2xl font-bold text-slate-900">שקופית ${slide.index}</h2>
-      <span class="text-sm text-slate-400">שקופית ${slide.index} מתוך ${totalSlides}</span>
-    </div>
+  <div class="border-b border-slate-200 pb-3 flex items-center justify-between">
+    <h2 class="text-2xl font-bold text-slate-900">שקופית ${slide.index}</h2>
+    <span class="text-sm text-slate-400">${slide.index} / ${totalSlides}</span>
   </div>
   ${displayText ? `<div class="bg-slate-50 p-6 rounded-xl border border-slate-200">
     <p class="text-slate-800 leading-relaxed whitespace-pre-wrap">${displayText}</p>
   </div>` : ''}
-${imageHtml}
+  ${imageHtml}
 </div>`;
 }
 
@@ -264,38 +232,34 @@ function groupSlidesIntoSections(slides: SlideData[]): Array<{
   slides: SlideData[];
 }> {
   const groups: Array<{ sectionTitle: string; sectionIndex: number; slides: SlideData[] }> = [];
-  let currentGroup: { sectionTitle: string; sectionIndex: number; slides: SlideData[] } | null = null;
+  let current: { sectionTitle: string; sectionIndex: number; slides: SlideData[] } | null = null;
 
   for (const slide of slides) {
-    if (slide.isChapterSlide || !currentGroup) {
-      if (currentGroup) groups.push(currentGroup);
-      currentGroup = {
+    if (slide.isChapterSlide || !current) {
+      if (current) groups.push(current);
+      current = {
         sectionTitle: slide.text || `פרק ${groups.length + 1}`,
         sectionIndex: groups.length,
         slides: slide.isChapterSlide ? [] : [slide],
       };
-      if (slide.isChapterSlide) {
-        groups.push(currentGroup);
-        currentGroup = null;
-      }
+      if (slide.isChapterSlide) { groups.push(current); current = null; }
     } else {
-      currentGroup.slides.push(slide);
+      current.slides.push(slide);
     }
   }
-
-  if (currentGroup) groups.push(currentGroup);
-
+  if (current) groups.push(current);
   if (groups.length === 0 && slides.length > 0) {
     return [{ sectionTitle: 'תוכן', sectionIndex: 0, slides }];
   }
-
   return groups.filter((g) => g.sectionTitle || g.slides.length > 0);
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
+// Accepts a file path (temp file on disk) instead of a Buffer
+// This means the 271MB PPTX is NEVER loaded fully into RAM
 
 export async function processPptx(
-  buffer: Buffer,
+  filePath: string,
   assetId: string,
   originalName: string,
   supabase?: SupabaseClient,
@@ -306,23 +270,13 @@ export async function processPptx(
     onProgress?.(msg);
   };
 
-  const fileSizeMB = Math.round(buffer.length / 1024 / 1024);
-  log(`פותח קובץ PPTX: ${originalName} (${fileSizeMB}MB)`);
+  log(`מעבד PPTX: ${originalName}`);
+  log(`קורא שקופיות מהדיסק (ללא טעינה לזיכרון)...`);
 
-  // Files over 80MB: skip media extraction to stay within memory limits
-  // Text and video links (YouTube/Vimeo) are always extracted regardless of size
-  const skipMedia = fileSizeMB > 80;
-  if (skipMedia) {
-    log(`קובץ גדול (${fileSizeMB}MB) — מדלג על חילוץ תמונות לחיסכון בזיכרון`);
-  }
+  // Load only XML files from ZIP — media stays on disk
+  const xmlEntries = await readZipEntries(filePath);
 
-  const zip = await JSZip.loadAsync(buffer);
-
-  // Free the original buffer immediately after JSZip loads it
-  // This allows GC to reclaim the memory before we process slides
-  (buffer as any) = null;
-
-  const slideFiles = Object.keys(zip.files)
+  const slideFiles = [...xmlEntries.keys()]
     .filter((f) => f.match(/^ppt\/slides\/slide\d+\.xml$/))
     .sort((a, b) => {
       const numA = parseInt(a.match(/slide(\d+)/)?.[1] || '0');
@@ -333,49 +287,27 @@ export async function processPptx(
   const totalSlides = slideFiles.length;
   log(`נמצאו ${totalSlides} שקופיות`);
 
-  // ── Phase 1: Parse all slides ──────────────────────────────────────────────
-  const slides: (SlideData & { imageUrls?: string[]; videoStoragePath?: string })[] = [];
+  // ── Phase 1: Parse slides (XML only, all tiny) ────────────────────────────
+  const slides: SlideData[] = [];
 
   for (let i = 0; i < slideFiles.length; i++) {
     const slideFile = slideFiles[i];
-    const xml = await zip.files[slideFile].async('text');
+    const xml = xmlEntries.get(slideFile)!.toString('utf8');
 
     const text = sanitizeText(extractTextFromXml(xml));
     const externalVideoUrl = extractExternalVideoUrl(xml);
-    const relationships = await parseSlideRelationships(zip, slideFile);
 
-    const imageUrls: string[] = [];
-    let videoStoragePath: string | undefined;
-
-    // ── Extract media only for smaller files ──────────────────────────────
-    if (supabase && !skipMedia) {
-      for (const rel of relationships) {
-        if (rel.type === 'image') {
-          const zipPath = resolveMediaPath(slideFile, rel.target);
-          const ext = rel.target.split('.').pop()?.toLowerCase() || 'png';
-          const storagePath = `pptx-media/${assetId}/slide${i + 1}_${rel.rId}.${ext}`;
-          const mime = mimeFromPath(rel.target);
-          const url = await uploadMediaToStorage(supabase, zip, zipPath, storagePath, mime);
-          if (url) imageUrls.push(url);
-        } else if (rel.type === 'video' && !externalVideoUrl) {
-          const zipPath = resolveMediaPath(slideFile, rel.target);
-          const ext = rel.target.split('.').pop()?.toLowerCase() || 'mp4';
-          const storagePath = `pptx-media/${assetId}/slide${i + 1}_video.${ext}`;
-          const mime = mimeFromPath(rel.target);
-          const url = await uploadMediaToStorage(supabase, zip, zipPath, storagePath, mime);
-          if (url) videoStoragePath = url;
-        }
-      }
-
-      if (imageUrls.length || videoStoragePath) {
-        log(`שקופית ${i + 1}: ${imageUrls.length} תמונות${videoStoragePath ? ', וידאו מוטמע' : ''}`);
-      }
-    }
+    // Parse rels XML
+    const relsKey = slideFile.replace(
+      /ppt\/slides\/(slide\d+\.xml)/,
+      'ppt/slides/_rels/$1.rels'
+    );
+    const relsXml = xmlEntries.get(relsKey)?.toString('utf8') || '';
+    const relationships = parseRelationships(relsXml);
 
     const hasMedia =
       relationships.some((r) => r.type === 'image' || r.type === 'video') ||
-      !!externalVideoUrl ||
-      imageUrls.length > 0;
+      !!externalVideoUrl;
 
     slides.push({
       index: i + 1,
@@ -384,17 +316,38 @@ export async function processPptx(
       externalVideoUrl,
       hasMedia,
       relationships,
-      imageUrls,
-      videoStoragePath,
+      imageUrls: [],
     });
   }
 
-  log(`מסווג שקופיות לפרקים...`);
-  const sectionGroups = groupSlidesIntoSections(slides);
+  // Free XML entries from memory — we don't need them anymore
+  xmlEntries.clear();
 
-  // ── Phase 2: AI enrichment (only text slides with enough content) ──────────
+  // ── Phase 2: Upload media (reads one entry at a time from disk) ───────────
+  if (supabase) {
+    log(`מעלה תמונות וסרטונים...`);
+    for (let i = 0; i < slides.length; i++) {
+      const slide = slides[i];
+      for (const rel of slide.relationships) {
+        const zipPath = resolveMediaZipPath(slideFiles[i], rel.target);
+        if (rel.type === 'image') {
+          const ext = rel.target.split('.').pop()?.toLowerCase() || 'png';
+          const storagePath = `pptx-media/${assetId}/slide${i + 1}_${rel.rId}.${ext}`;
+          const url = await uploadMediaEntry(filePath, zipPath, supabase, storagePath, mimeFromPath(rel.target));
+          if (url) slide.imageUrls!.push(url);
+        } else if (rel.type === 'video' && !slide.externalVideoUrl) {
+          const ext = rel.target.split('.').pop()?.toLowerCase() || 'mp4';
+          const storagePath = `pptx-media/${assetId}/slide${i + 1}_video.${ext}`;
+          const url = await uploadMediaEntry(filePath, zipPath, supabase, storagePath, mimeFromPath(rel.target));
+          if (url) slide.videoStoragePath = url;
+        }
+      }
+    }
+    log(`העלאת מדיה הושלמה`);
+  }
+
+  // ── Phase 3: AI enrichment ────────────────────────────────────────────────
   log(`מעשיר תוכן עם AI...`);
-
   const pagesToEnrich = slides
     .filter((s) => !s.isChapterSlide && s.text.trim().length >= 30)
     .map((s, idx) => ({ index: idx, text: s.text, title: `שקופית ${s.index}` }));
@@ -402,17 +355,16 @@ export async function processPptx(
   const aiResults = await enrichPagesBatch(pagesToEnrich, 5);
   log(`AI הושלם: ${aiResults.size} עמודים עושרו`);
 
-  // ── Phase 3: Build output ──────────────────────────────────────────────────
+  // ── Phase 4: Build output ─────────────────────────────────────────────────
+  const sectionGroups = groupSlidesIntoSections(slides);
   const sections: SectionOutput[] = [];
   const pages: PageOutput[] = [];
   const questions: QuestionOutput[] = [];
-
   let globalPageIndex = 0;
-  let enrichmentIndex = 0;
+  let enrichIdx = 0;
 
   for (const group of sectionGroups) {
     const sectionIndex = sections.length;
-
     sections.push({
       title: sanitizeText(group.sectionTitle),
       orderIndex: sectionIndex,
@@ -421,23 +373,15 @@ export async function processPptx(
     });
 
     for (const slide of group.slides) {
-      const aiData = aiResults.get(enrichmentIndex);
-      const isVideoSlide = !!slide.externalVideoUrl || !!slide.videoStoragePath;
-      const pageType = isVideoSlide ? 'video' : 'pptx_slide';
-
-      const slideWithAi = { ...slide, aiSummary: aiData?.summary };
-      const html = buildSlideHtml(slideWithAi, totalSlides);
-
-      const pageTitle = slide.text
-        ? sanitizeText(slide.text).substring(0, 80)
-        : `שקופית ${slide.index}`;
+      const aiData = aiResults.get(enrichIdx);
+      slide.aiSummary = aiData?.summary;
 
       pages.push({
         sectionIndex,
         orderIndex: globalPageIndex,
-        pageType,
-        title: pageTitle,
-        htmlContent: html,
+        pageType: (slide.externalVideoUrl || slide.videoStoragePath) ? 'video' : 'pptx_slide',
+        title: sanitizeText(slide.text).substring(0, 80) || `שקופית ${slide.index}`,
+        htmlContent: buildSlideHtml(slide, totalSlides),
         assetId,
         videoStoragePath: slide.videoStoragePath,
         slideIndex: slide.index,
@@ -449,7 +393,6 @@ export async function processPptx(
         },
       });
 
-      // Add AI-generated questions
       if (aiData?.questions?.length) {
         for (const q of aiData.questions) {
           questions.push({ ...q, pageIndex: globalPageIndex });
@@ -457,11 +400,10 @@ export async function processPptx(
       }
 
       globalPageIndex++;
-      if (!slide.isChapterSlide) enrichmentIndex++;
+      if (!slide.isChapterSlide) enrichIdx++;
     }
   }
 
   log(`הושלם: ${sections.length} פרקים, ${pages.length} עמודים, ${questions.length} שאלות`);
-
   return { sections, pages, questions, derivedAssets: [] };
 }

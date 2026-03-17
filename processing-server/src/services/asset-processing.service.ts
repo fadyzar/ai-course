@@ -1,4 +1,6 @@
 import { SupabaseClient } from '@supabase/supabase-js';
+import { createWriteStream } from 'fs';
+import { unlink } from 'fs/promises';
 import { ProcessingResult, AssetRecord } from '../types/index.js';
 import { detectFileCategory } from '../utils/file-detector.js';
 import { processPptx } from './pptx-processing.service.js';
@@ -15,6 +17,45 @@ export interface ProcessAssetOptions {
   clearExisting?: boolean;
 }
 
+// For PPTX: stream directly to disk — never loads the full file into RAM
+async function downloadAssetToFile(
+  supabase: SupabaseClient,
+  storagePath: string,
+  tmpPath: string
+): Promise<void> {
+  const { data, error } = await supabase.storage
+    .from('course-assets')
+    .download(storagePath);
+
+  if (error || !data) {
+    throw new Error(`Storage download failed: ${error?.message || 'no data'}`);
+  }
+
+  const reader = data.stream().getReader();
+  const fileStream = createWriteStream(tmpPath);
+
+  await new Promise<void>((resolve, reject) => {
+    fileStream.on('error', reject);
+    fileStream.on('finish', resolve);
+
+    const pump = async () => {
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) { fileStream.end(); break; }
+          if (!fileStream.write(value)) {
+            await new Promise<void>((r) => fileStream.once('drain', r));
+          }
+        }
+      } catch (err) {
+        reject(err);
+      }
+    };
+    pump();
+  });
+}
+
+// For PDF/DOCX: buffer is fine (usually under 50MB)
 async function downloadAsset(
   supabase: SupabaseClient,
   storagePath: string
@@ -27,26 +68,8 @@ async function downloadAsset(
     throw new Error(`Storage download failed: ${error?.message || 'no data'}`);
   }
 
-  // Stream to buffer instead of arrayBuffer() which can OOM on large files
-  const reader = data.stream().getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    totalBytes += value.byteLength;
-  }
-
-  const merged = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-
-  return Buffer.from(merged);
+  const arrayBuffer = await data.arrayBuffer();
+  return Buffer.from(arrayBuffer);
 }
 
 export async function processAsset(
@@ -90,13 +113,23 @@ export async function processAsset(
       assetRecord.original_name,
       onProgress
     );
+  } else if (category === 'pptx') {
+    // Stream to disk — never loads full file into RAM
+    const tmpPath = `/tmp/pptx_${assetId}_${Date.now()}.pptx`;
+    logger.info({ assetId, tmpPath }, '[ORCHESTRATOR] Downloading PPTX to disk');
+    try {
+      await downloadAssetToFile(supabase, assetRecord.storage_path, tmpPath);
+      logger.info({ assetId, tmpPath }, '[ORCHESTRATOR] PPTX on disk, processing');
+      result = await processPptx(tmpPath, assetId, assetRecord.original_name, supabase, onProgress);
+    } finally {
+      await unlink(tmpPath).catch(() => {});
+      logger.info({ assetId, tmpPath }, '[ORCHESTRATOR] Temp file deleted');
+    }
   } else {
     const buffer = await downloadAsset(supabase, assetRecord.storage_path);
     logger.info({ assetId, sizeBytes: buffer.length }, '[ORCHESTRATOR] File downloaded');
 
-    if (category === 'pptx') {
-      result = await processPptx(buffer, assetId, assetRecord.original_name, supabase, onProgress);
-    } else if (category === 'pdf') {
+    if (category === 'pdf') {
       result = await processPdf(buffer, assetId, assetRecord.original_name, onProgress);
     } else if (category === 'docx') {
       result = await processDocx(buffer, assetId, assetRecord.original_name, onProgress);
@@ -213,11 +246,17 @@ export async function processJobById(
             assetRecord.original_name,
             (msg) => logger.info({ msg }, '[PROGRESS]')
           );
+        } else if (category === 'pptx') {
+          const tmpPath = `/tmp/pptx_${asset.id}_${Date.now()}.pptx`;
+          try {
+            await downloadAssetToFile(supabase, assetRecord.storage_path, tmpPath);
+            assetResult = await processPptx(tmpPath, asset.id, assetRecord.original_name, supabase, (msg) => logger.info({ msg }, '[PROGRESS]'));
+          } finally {
+            await unlink(tmpPath).catch(() => {});
+          }
         } else {
           const buffer = await downloadAsset(supabase, assetRecord.storage_path);
-          if (category === 'pptx') {
-            assetResult = await processPptx(buffer, asset.id, assetRecord.original_name, supabase, (msg) => logger.info({ msg }, '[PROGRESS]'));
-          } else if (category === 'pdf') {
+          if (category === 'pdf') {
             assetResult = await processPdf(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'));
           } else if (category === 'docx') {
             assetResult = await processDocx(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'));
