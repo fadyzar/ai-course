@@ -17,21 +17,32 @@ export interface ProcessAssetOptions {
   clearExisting?: boolean;
 }
 
-// For PPTX: stream directly to disk — never loads the full file into RAM
+// For PPTX: true streaming download via signed URL — never buffers the full file in RAM.
+// supabase.storage.download() calls response.blob() internally, which buffers everything
+// before returning. For large files (100MB+) this causes OOM on constrained servers.
 async function downloadAssetToFile(
   supabase: SupabaseClient,
   storagePath: string,
   tmpPath: string
 ): Promise<void> {
-  const { data, error } = await supabase.storage
+  // Get a short-lived signed URL and stream it directly to disk via fetch
+  const { data: signedData, error: signedError } = await supabase.storage
     .from('course-assets')
-    .download(storagePath);
+    .createSignedUrl(storagePath, 300); // 5-minute expiry
 
-  if (error || !data) {
-    throw new Error(`Storage download failed: ${error?.message || 'no data'}`);
+  if (signedError || !signedData?.signedUrl) {
+    throw new Error(`Failed to create signed URL: ${signedError?.message || 'no URL'}`);
   }
 
-  const reader = data.stream().getReader();
+  const response = await fetch(signedData.signedUrl);
+  if (!response.ok) {
+    throw new Error(`Download failed: HTTP ${response.status}`);
+  }
+  if (!response.body) {
+    throw new Error('Download failed: no response body');
+  }
+
+  const reader = response.body.getReader();
   const fileStream = createWriteStream(tmpPath);
 
   await new Promise<void>((resolve, reject) => {
