@@ -111,7 +111,18 @@ export async function processAsset(
   const category = detectFileCategory(assetRecord.file_type);
   logger.info({ assetId, fileType: assetRecord.file_type, category }, '[ORCHESTRATOR] File category detected');
 
+  const sizeMb = assetRecord.size_bytes ? ` (${(assetRecord.size_bytes / 1024 / 1024).toFixed(1)}MB)` : '';
+
   let result: ProcessingResult;
+
+  // Write a progress log to the DB so the UI shows activity.
+  // Also updates the job's progress percentage.
+  const dbProgress = async (message: string, progress: number) => {
+    logger.info({ assetId, message }, '[PROGRESS]');
+    if (!jobId) return;
+    await supabase.from('processing_logs').insert({ job_id: jobId, level: 'info', message });
+    await supabase.from('jobs').update({ progress, updated_at: new Date().toISOString() }).eq('id', jobId);
+  };
 
   const onProgress = (message: string) => {
     logger.info({ assetId, message }, '[PROGRESS]');
@@ -125,28 +136,39 @@ export async function processAsset(
       onProgress
     );
   } else if (category === 'pptx') {
-    // Stream to disk — never loads full file into RAM
     const tmpPath = `/tmp/pptx_${assetId}_${Date.now()}.pptx`;
-    logger.info({ assetId, tmpPath }, '[ORCHESTRATOR] Downloading PPTX to disk');
+    await dbProgress(`מוריד ${assetRecord.original_name}${sizeMb} לדיסק...`, 8);
     try {
       await downloadAssetToFile(supabase, assetRecord.storage_path, tmpPath);
-      logger.info({ assetId, tmpPath }, '[ORCHESTRATOR] PPTX on disk, processing');
-      result = await processPptx(tmpPath, assetId, assetRecord.original_name, supabase, onProgress);
+      await dbProgress(`הורדה הושלמה, מחלץ שקופיות...`, 15);
+      result = await processPptx(tmpPath, assetId, assetRecord.original_name, supabase, async (msg) => {
+        logger.info({ assetId, msg }, '[PPTX-PROGRESS]');
+        if (jobId) {
+          await supabase.from('processing_logs').insert({ job_id: jobId, level: 'info', message: msg });
+        }
+      });
+      await dbProgress(`עיבוד הושלם, שומר למסד הנתונים...`, 70);
     } finally {
       await unlink(tmpPath).catch(() => {});
-      logger.info({ assetId, tmpPath }, '[ORCHESTRATOR] Temp file deleted');
     }
   } else {
+    await dbProgress(`מוריד ${assetRecord.original_name}${sizeMb}...`, 8);
     const buffer = await downloadAsset(supabase, assetRecord.storage_path);
-    logger.info({ assetId, sizeBytes: buffer.length }, '[ORCHESTRATOR] File downloaded');
+    await dbProgress(`מעבד תוכן...`, 15);
 
     if (category === 'pdf') {
-      result = await processPdf(buffer, assetId, assetRecord.original_name, onProgress);
+      result = await processPdf(buffer, assetId, assetRecord.original_name, async (msg) => {
+        logger.info({ assetId, msg }, '[PDF-PROGRESS]');
+        if (jobId) {
+          await supabase.from('processing_logs').insert({ job_id: jobId, level: 'info', message: msg });
+        }
+      });
     } else if (category === 'docx') {
       result = await processDocx(buffer, assetId, assetRecord.original_name, onProgress);
     } else {
       throw new Error(`Unsupported file type: ${assetRecord.file_type}`);
     }
+    await dbProgress(`עיבוד הושלם, שומר למסד הנתונים...`, 70);
   }
 
   logger.info(
