@@ -464,10 +464,18 @@ async function processJob(supabase: any, job: any) {
   const claudeApiKey = Deno.env.get("CLAUDE_API_KEY");
   const useAI = !!claudeApiKey;
 
-  await supabase
+  // Atomic claim: only proceed if job is still 'queued'
+  const { data: claimed } = await supabase
     .from("jobs")
     .update({ status: "processing", progress: 0, updated_at: new Date().toISOString() })
-    .eq("id", job.id);
+    .eq("id", job.id)
+    .eq("status", "queued")
+    .select("id");
+
+  if (!claimed || claimed.length === 0) {
+    console.log(`[worker] Job ${job.id} already claimed by another worker, skipping`);
+    return false;
+  }
 
   await log(supabase, job.id, "info", "מתחיל עיבוד...", 5);
 
@@ -799,6 +807,8 @@ async function processJob(supabase: any, job: any) {
 
     await log(supabase, job.id, "info", `נשמרו ${videoAssets.length} סרטונים`, 99);
   }
+
+  return true;
 }
 
 Deno.serve(async (req: Request) => {
@@ -826,9 +836,15 @@ Deno.serve(async (req: Request) => {
       console.log(`[WORKER] Processing job ${job.id}`);
       let success = false;
       let error: string | null = null;
+      let skipped = false;
 
       try {
-        await processJob(supabase, job);
+        const claimed = await processJob(supabase, job);
+        if (claimed === false) {
+          skipped = true;
+          results.push({ id: job.id, skipped: true });
+          continue;
+        }
         success = true;
 
         await supabase
@@ -847,20 +863,22 @@ Deno.serve(async (req: Request) => {
         });
       }
 
-      await supabase
-        .from("jobs")
-        .update({
-          status: success ? "completed" : "failed",
-          progress: success ? 100 : undefined,
-          error,
-          metadata: success
-            ? { current_step: "הושלם בהצלחה!" }
-            : { current_step: `נכשל: ${error}` },
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", job.id);
+      if (!skipped) {
+        await supabase
+          .from("jobs")
+          .update({
+            status: success ? "completed" : "failed",
+            progress: success ? 100 : undefined,
+            error,
+            metadata: success
+              ? { current_step: "הושלם בהצלחה!" }
+              : { current_step: `נכשל: ${error}` },
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", job.id);
 
-      results.push({ id: job.id, success, error });
+        results.push({ id: job.id, success, error });
+      }
     }
 
     return new Response(
