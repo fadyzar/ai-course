@@ -306,9 +306,21 @@ export async function processPptx(
     onProgress?.(msg);
   };
 
-  log(`פותח קובץ PPTX: ${originalName}`);
+  const fileSizeMB = Math.round(buffer.length / 1024 / 1024);
+  log(`פותח קובץ PPTX: ${originalName} (${fileSizeMB}MB)`);
+
+  // Files over 80MB: skip media extraction to stay within memory limits
+  // Text and video links (YouTube/Vimeo) are always extracted regardless of size
+  const skipMedia = fileSizeMB > 80;
+  if (skipMedia) {
+    log(`קובץ גדול (${fileSizeMB}MB) — מדלג על חילוץ תמונות לחיסכון בזיכרון`);
+  }
 
   const zip = await JSZip.loadAsync(buffer);
+
+  // Free the original buffer immediately after JSZip loads it
+  // This allows GC to reclaim the memory before we process slides
+  (buffer as any) = null;
 
   const slideFiles = Object.keys(zip.files)
     .filter((f) => f.match(/^ppt\/slides\/slide\d+\.xml$/))
@@ -335,8 +347,8 @@ export async function processPptx(
     const imageUrls: string[] = [];
     let videoStoragePath: string | undefined;
 
-    // ── Extract media if Supabase client is available ──────────────────────
-    if (supabase) {
+    // ── Extract media only for smaller files ──────────────────────────────
+    if (supabase && !skipMedia) {
       for (const rel of relationships) {
         if (rel.type === 'image') {
           const zipPath = resolveMediaPath(slideFile, rel.target);
@@ -346,7 +358,6 @@ export async function processPptx(
           const url = await uploadMediaToStorage(supabase, zip, zipPath, storagePath, mime);
           if (url) imageUrls.push(url);
         } else if (rel.type === 'video' && !externalVideoUrl) {
-          // Embedded video file inside PPTX
           const zipPath = resolveMediaPath(slideFile, rel.target);
           const ext = rel.target.split('.').pop()?.toLowerCase() || 'mp4';
           const storagePath = `pptx-media/${assetId}/slide${i + 1}_video.${ext}`;

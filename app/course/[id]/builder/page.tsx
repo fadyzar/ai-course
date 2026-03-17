@@ -390,16 +390,16 @@ export default function CourseBuilderPage() {
           <div className="flex flex-col gap-2">
             {assets.length > 0 && (
               <Button
-                onClick={handleDownloadOriginal}
-                disabled={isDownloading}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
+                onClick={handleStartProcessing}
+                disabled={isProcessing}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white"
               >
-                {isDownloading ? (
+                {isProcessing ? (
                   <Loader2 className="h-4 w-4 ml-2 animate-spin" />
                 ) : (
                   <Download className="h-4 w-4 ml-2" />
                 )}
-                {isDownloading ? 'ממיר...' : 'המר למצגת'}
+                {isProcessing ? 'מעבד...' : 'התחל עיבוד'}
               </Button>
             )}
             <Button
@@ -452,7 +452,7 @@ export default function CourseBuilderPage() {
                     loadAssets();
                     toast.success('הקובץ הועלה בהצלחה!');
                   }}
-                  onStartProcessing={handleDownloadOriginal}
+                  onStartProcessing={handleStartProcessing}
                 />
               </TabsContent>
               <TabsContent value="files">
