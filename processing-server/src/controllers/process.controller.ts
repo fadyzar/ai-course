@@ -4,6 +4,10 @@ import { processAsset, processJobById } from '../services/asset-processing.servi
 import { ProcessAssetRequest, ProcessJobRequest, ProcessingResponse } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
+// In-process set to prevent the same jobId from being dispatched twice
+// before the DB atomic update completes (handles same-process double-requests)
+const activeJobs = new Set<string>();
+
 export async function handleProcessAsset(
   request: FastifyRequest<{ Body: ProcessAssetRequest }>,
   reply: FastifyReply
@@ -58,6 +62,12 @@ export async function handleProcessJob(
 
   logger.info({ jobId }, '[CONTROLLER] process-job request');
 
+  if (activeJobs.has(jobId)) {
+    logger.warn({ jobId }, '[CONTROLLER] Job already active in this process, ignoring duplicate request');
+    return reply.status(202).send({ success: true, accepted: true, jobId, duplicate: true });
+  }
+
+  activeJobs.add(jobId);
   reply.status(202).send({ success: true, accepted: true, jobId });
 
   setImmediate(async () => {
@@ -67,6 +77,8 @@ export async function handleProcessJob(
       logger.info({ jobId }, '[CONTROLLER] Background job completed');
     } catch (err: any) {
       logger.error({ jobId, err: err.message }, '[CONTROLLER] Background job failed');
+    } finally {
+      activeJobs.delete(jobId);
     }
   });
 

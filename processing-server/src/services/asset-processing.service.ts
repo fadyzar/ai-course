@@ -172,14 +172,22 @@ export async function processJobById(
     throw new Error(`Job not found: ${jobError?.message || 'not found'}`);
   }
 
-  if (job.status !== 'queued' && job.status !== 'processing') {
-    throw new Error(`Job ${jobId} is in status '${job.status}', cannot process`);
+  if (job.status !== 'queued') {
+    throw new Error(`Job ${jobId} is already in status '${job.status}', skipping`);
   }
 
-  await supabase
+  // Atomic claim: only update if status is still 'queued'.
+  // If two concurrent requests race here, exactly one will match the WHERE clause.
+  const { data: claimed } = await supabase
     .from('jobs')
     .update({ status: 'processing', progress: 5, updated_at: new Date().toISOString() })
-    .eq('id', jobId);
+    .eq('id', jobId)
+    .eq('status', 'queued')
+    .select('id');
+
+  if (!claimed || claimed.length === 0) {
+    throw new Error(`Job ${jobId} was already claimed by another worker, skipping`);
+  }
 
   await supabase.from('processing_logs').insert({
     job_id: jobId,

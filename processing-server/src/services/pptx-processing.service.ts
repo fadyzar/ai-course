@@ -229,25 +229,36 @@ function groupSlidesIntoSections(slides: SlideData[]): Array<{
 }> {
   const groups: Array<{ sectionTitle: string; sectionIndex: number; slides: SlideData[] }> = [];
   let current: { sectionTitle: string; sectionIndex: number; slides: SlideData[] } | null = null;
+  let pendingChapterTitle: string | null = null;
 
   for (const slide of slides) {
-    if (slide.isChapterSlide || !current) {
-      if (current) groups.push(current);
-      current = {
-        sectionTitle: slide.text || `פרק ${groups.length + 1}`,
-        sectionIndex: groups.length,
-        slides: slide.isChapterSlide ? [] : [slide],
-      };
-      if (slide.isChapterSlide) { groups.push(current); current = null; }
+    if (slide.isChapterSlide) {
+      // Save previous group only if it has slides
+      if (current && current.slides.length > 0) groups.push(current);
+      // Store chapter title to apply to the next content group
+      pendingChapterTitle = sanitizeText(slide.text) || `פרק ${groups.length + 1}`;
+      current = null;
     } else {
-      current.slides.push(slide);
+      if (!current) {
+        // Start a new section — use the pending chapter title if available
+        current = {
+          sectionTitle: pendingChapterTitle || sanitizeText(slide.text).substring(0, 60) || `פרק ${groups.length + 1}`,
+          sectionIndex: groups.length,
+          slides: [slide],
+        };
+        pendingChapterTitle = null;
+      } else {
+        current.slides.push(slide);
+      }
     }
   }
-  if (current) groups.push(current);
+
+  if (current && current.slides.length > 0) groups.push(current);
+
   if (groups.length === 0 && slides.length > 0) {
     return [{ sectionTitle: 'תוכן', sectionIndex: 0, slides }];
   }
-  return groups.filter((g) => g.sectionTitle || g.slides.length > 0);
+  return groups;
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
@@ -288,7 +299,12 @@ export async function processPptx(
 
   for (let i = 0; i < slideFiles.length; i++) {
     const slideFile = slideFiles[i];
-    const xml = xmlEntries.get(slideFile)!.toString('utf8');
+    const xmlBuf = xmlEntries.get(slideFile);
+    if (!xmlBuf) {
+      logger.warn({ slideFile }, '[PPTX] Missing XML for slide, skipping');
+      continue;
+    }
+    const xml = xmlBuf.toString('utf8');
 
     const text = sanitizeText(extractTextFromXml(xml));
     const externalVideoUrl = extractExternalVideoUrl(xml);
@@ -396,7 +412,8 @@ export async function processPptx(
       }
 
       globalPageIndex++;
-      if (!slide.isChapterSlide) enrichIdx++;
+      // Must match the pagesToEnrich filter: non-chapter AND text.length >= 30
+      if (!slide.isChapterSlide && slide.text.trim().length >= 30) enrichIdx++;
     }
   }
 

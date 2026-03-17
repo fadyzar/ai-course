@@ -15,15 +15,13 @@ function escapeHtml(str: string): string {
 
 function buildPageHtml(pageNum: number, totalPages: number, text: string): string {
   const escaped = escapeHtml(sanitizeText(text));
-  return `<div dir="rtl" class="max-w-4xl mx-auto space-y-6 py-4">
-  <div class="border-b border-slate-200 pb-3">
-    <div class="flex items-center justify-between">
-      <h2 class="text-2xl font-bold text-slate-900">עמוד ${pageNum}</h2>
-      <span class="text-sm text-slate-400">עמוד ${pageNum} מתוך ${totalPages}</span>
-    </div>
+  return `<div style="direction:rtl;font-family:'Segoe UI',Arial,sans-serif;max-width:800px;margin:0 auto;padding:8px 0;">
+  <div style="border-bottom:2px solid #e2e8f0;padding-bottom:12px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;">
+    <h2 style="font-size:22px;font-weight:700;color:#0f172a;margin:0;">עמוד ${pageNum}</h2>
+    <span style="font-size:13px;color:#94a3b8;">${pageNum} / ${totalPages}</span>
   </div>
-  <div class="bg-slate-50 p-6 rounded-xl border border-slate-200">
-    <p class="text-slate-800 leading-relaxed whitespace-pre-wrap text-base">${escaped}</p>
+  <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:24px;">
+    <p style="font-size:16px;line-height:1.8;color:#1e293b;white-space:pre-wrap;margin:0;">${escaped}</p>
   </div>
 </div>`;
 }

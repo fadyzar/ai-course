@@ -53,18 +53,11 @@ export async function writeCourse(
   logger.info({ courseId, assetId }, '[WRITE] Starting course write');
 
   if (clearExisting) {
-    const { data: existingSections } = await supabase
-      .from('course_sections')
-      .select('id')
-      .eq('course_id', courseId);
-
-    if (existingSections && existingSections.length > 0) {
-      for (const section of existingSections) {
-        await supabase.from('course_pages').delete().eq('section_id', section.id);
-      }
-      await supabase.from('course_sections').delete().eq('course_id', courseId);
-    }
+    // Three bulk deletes by course_id — no N+1 loop
     await supabase.from('questions').delete().eq('course_id', courseId);
+    await supabase.from('course_pages').delete().eq('course_id', courseId);
+    await supabase.from('course_sections').delete().eq('course_id', courseId);
+    logger.info({ courseId }, '[WRITE] Cleared existing data');
   }
 
   await logProgress(supabase, jobId, 'info', 'שומר פרקים...', 88);
@@ -99,7 +92,10 @@ export async function writeCourse(
     const batch = result.pages.slice(i, i + PAGE_BATCH);
 
     const pageInserts = batch.map((p: PageOutput) => {
-      const sectionId = sectionIds[p.sectionIndex] || null;
+      const sectionId = sectionIds[p.sectionIndex] ?? null;
+      if (p.sectionIndex >= sectionIds.length) {
+        logger.warn({ sectionIndex: p.sectionIndex, maxIndex: sectionIds.length - 1 }, '[WRITE] Page sectionIndex out of bounds');
+      }
       return {
         course_id: courseId,
         section_id: sectionId,
@@ -144,8 +140,11 @@ export async function writeCourse(
 
     const questionInserts = result.questions
       .map((q: QuestionOutput) => {
-        const pageId = allPageIds[q.pageIndex] || null;
-        if (!pageId) return null;
+        const pageId = allPageIds[q.pageIndex] ?? null;
+        if (!pageId) {
+          logger.warn({ pageIndex: q.pageIndex, maxIndex: allPageIds.length - 1 }, '[WRITE] Question pageIndex out of bounds');
+          return null;
+        }
         return {
           course_id: courseId,
           page_id: pageId,
@@ -172,10 +171,16 @@ export async function writeCourse(
     }
   }
 
-  await supabase
+  // Mark course as ready — do NOT overwrite metadata, just update status
+  const { error: courseUpdateError } = await supabase
     .from('courses')
     .update({ status: 'ready', updated_at: new Date().toISOString() })
     .eq('id', courseId);
+
+  if (courseUpdateError) {
+    logger.error({ err: courseUpdateError.message }, '[WRITE] Failed to set course status=ready');
+    throw new Error(`Failed to update course status: ${courseUpdateError.message}`);
+  }
 
   if (assetId) {
     await supabase
@@ -186,7 +191,10 @@ export async function writeCourse(
 
   await logProgress(supabase, jobId, 'info', 'הקורס מוכן!', 100);
 
-  logger.info({ courseId, sections: sectionIds.length, pages: allPageIds.length }, '[WRITE] Done');
+  logger.info(
+    { courseId, sections: sectionIds.length, pages: allPageIds.length },
+    '[WRITE] Done'
+  );
 
   return { sectionIds, pageIds: allPageIds };
 }
