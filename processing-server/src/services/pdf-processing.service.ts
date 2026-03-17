@@ -48,16 +48,33 @@ export async function processPdf(
     pageCount = data.numpages || 1;
 
     const rawText = data.text || '';
-    const sections = rawText
+
+    // Strategy 1: form-feed characters (one per PDF page in text-based PDFs)
+    const ffSplit = rawText
       .split(/\f/)
       .map((s: string) => s.replace(/\n{3,}/g, '\n\n').trim())
       .filter((s: string) => s.length > 10);
 
-    if (sections.length > 0) {
-      pageTexts = sections;
+    if (ffSplit.length >= 2) {
+      pageTexts = ffSplit;
     } else {
-      const chunks = rawText.split(/\n\n+/).filter((s: string) => s.trim().length > 20);
-      pageTexts = chunks.length > 0 ? chunks : [`תוכן מקובץ ${originalName}`];
+      // Strategy 2: double-newline paragraph split
+      const paraChunks = rawText.split(/\n{2,}/).map((s: string) => s.trim()).filter((s: string) => s.length > 20);
+      if (paraChunks.length >= 2) {
+        pageTexts = paraChunks;
+      } else if (rawText.trim().length > 0) {
+        // Strategy 3: no structural separators — split proportionally by actual page count
+        // This handles PDFs where all text comes as one blob (common with scanned/vector PDFs)
+        const charsPerPage = Math.ceil(rawText.length / pageCount);
+        const proportional: string[] = [];
+        for (let i = 0; i < pageCount; i++) {
+          const chunk = rawText.slice(i * charsPerPage, (i + 1) * charsPerPage).trim();
+          if (chunk.length > 0) proportional.push(chunk);
+        }
+        pageTexts = proportional.length > 0 ? proportional : [rawText.trim()];
+      } else {
+        pageTexts = [`תוכן מקובץ ${originalName}`];
+      }
     }
 
     log(`חולצו ${pageTexts.length} מקטעים מ-${pageCount} עמודים`);

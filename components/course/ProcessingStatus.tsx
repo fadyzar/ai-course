@@ -167,8 +167,12 @@ export function ProcessingStatus({ courseId }: ProcessingStatusProps) {
       const processingServerUrl = process.env.NEXT_PUBLIC_PROCESSING_SERVER_URL;
       const queuedJob = jobs.find((j) => j.status === 'queued');
 
-      if (processingServerUrl && queuedJob) {
-        // ── Primary: Processing Server ──────────────────────────────────────
+      if (processingServerUrl) {
+        // ── Processing Server is configured — ONLY use it, never fall back ──
+        if (!queuedJob) {
+          toast.info('העיבוד כבר בתהליך או הושלם');
+          return;
+        }
         const apiKey = process.env.NEXT_PUBLIC_PROCESSING_SERVER_API_KEY || '';
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (apiKey) headers['X-Api-Key'] = apiKey;
@@ -186,7 +190,7 @@ export function ProcessingStatus({ courseId }: ProcessingStatusProps) {
 
         toast.success('עיבוד התחיל בשרת הייעודי');
       } else {
-        // ── Fallback: Edge Function ─────────────────────────────────────────
+        // ── No processing server — use Edge Function fallback ───────────────
         const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
         const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
         if (!supabaseUrl || !supabaseKey) throw new Error('משתני סביבה חסרים');
