@@ -55,6 +55,9 @@ export interface SlideData {
   externalVideoUrl?: string;
   hasMedia: boolean;
   relationships: SlideRelationship[];
+  imageUrls?: string[];
+  videoStoragePath?: string;
+  aiSummary?: string;
 }
 
 export interface SlideRelationship {

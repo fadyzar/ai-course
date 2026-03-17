@@ -27,8 +27,26 @@ async function downloadAsset(
     throw new Error(`Storage download failed: ${error?.message || 'no data'}`);
   }
 
-  const arrayBuffer = await data.arrayBuffer();
-  return Buffer.from(arrayBuffer);
+  // Stream to buffer instead of arrayBuffer() which can OOM on large files
+  const reader = data.stream().getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    totalBytes += value.byteLength;
+  }
+
+  const merged = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return Buffer.from(merged);
 }
 
 export async function processAsset(
@@ -77,7 +95,7 @@ export async function processAsset(
     logger.info({ assetId, sizeBytes: buffer.length }, '[ORCHESTRATOR] File downloaded');
 
     if (category === 'pptx') {
-      result = await processPptx(buffer, assetId, assetRecord.original_name, onProgress);
+      result = await processPptx(buffer, assetId, assetRecord.original_name, supabase, onProgress);
     } else if (category === 'pdf') {
       result = await processPdf(buffer, assetId, assetRecord.original_name, onProgress);
     } else if (category === 'docx') {
@@ -198,7 +216,7 @@ export async function processJobById(
         } else {
           const buffer = await downloadAsset(supabase, assetRecord.storage_path);
           if (category === 'pptx') {
-            assetResult = await processPptx(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'));
+            assetResult = await processPptx(buffer, asset.id, assetRecord.original_name, supabase, (msg) => logger.info({ msg }, '[PROGRESS]'));
           } else if (category === 'pdf') {
             assetResult = await processPdf(buffer, asset.id, assetRecord.original_name, (msg) => logger.info({ msg }, '[PROGRESS]'));
           } else if (category === 'docx') {

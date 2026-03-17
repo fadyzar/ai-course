@@ -169,42 +169,88 @@ export default function CourseBuilderPage() {
       }
 
       setIsProcessing(true);
-      toast.info('מתחיל עיבוד הקורס עם AI...');
 
-      await (supabase.from('courses') as any)
-        .update({ status: 'processing' })
-        .eq('id', courseId);
+      const processingServerUrl = process.env.NEXT_PUBLIC_PROCESSING_SERVER_URL;
 
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      if (processingServerUrl) {
+        // ── Primary: Processing Server ────────────────────────────────────────
+        toast.info('מתחיל עיבוד הקורס...');
 
-      if (!supabaseUrl || !supabaseKey) {
-        throw new Error('חסרות הגדרות מערכת');
-      }
+        await (supabase.from('courses') as any)
+          .update({ status: 'processing' })
+          .eq('id', courseId);
 
-      for (const asset of currentAssets) {
-        toast.info(`מעבד קובץ: ${asset.original_name}`);
+        // Create one job for all assets
+        const { data: job, error: jobError } = await (supabase.from('jobs') as any)
+          .insert({
+            course_id: courseId,
+            asset_id: currentAssets.length === 1 ? currentAssets[0].id : null,
+            type: 'process_course',
+            status: 'queued',
+            progress: 0,
+            metadata: { assetCount: currentAssets.length },
+          })
+          .select()
+          .single();
 
-        const response = await fetch(`${supabaseUrl}/functions/v1/convert-with-ai`, {
+        if (jobError) throw new Error(`שגיאה ביצירת משימה: ${jobError.message}`);
+
+        const apiKey = process.env.NEXT_PUBLIC_PROCESSING_SERVER_API_KEY || '';
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['X-Api-Key'] = apiKey;
+
+        const response = await fetch(`${processingServerUrl}/process-job`, {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-            'apikey': supabaseKey,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ courseId, assetId: asset.id }),
+          headers,
+          body: JSON.stringify({ jobId: job.id }),
         });
 
         if (!response.ok) {
-          const err = await response.json().catch(() => ({ error: 'שגיאה לא ידועה' }));
-          throw new Error(err.error || `שגיאה בעיבוד ${asset.original_name}`);
+          const err = await response.text();
+          throw new Error(`Processing server error: ${err}`);
         }
 
-        const result = await response.json();
-        toast.success(`הקובץ ${asset.original_name} עובד - ${result.sections} פרקים, ${result.questions} שאלות`);
-      }
+        toast.success('העיבוד התחיל! תוכל לעקוב אחרי ההתקדמות למטה');
+        await loadCourse();
+      } else {
+        // ── Fallback: Edge Function ───────────────────────────────────────────
+        toast.info('מתחיל עיבוד הקורס עם AI...');
 
-      await loadCourse();
+        await (supabase.from('courses') as any)
+          .update({ status: 'processing' })
+          .eq('id', courseId);
+
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+        const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+        if (!supabaseUrl || !supabaseKey) {
+          throw new Error('חסרות הגדרות מערכת');
+        }
+
+        for (const asset of currentAssets) {
+          toast.info(`מעבד קובץ: ${asset.original_name}`);
+
+          const response = await fetch(`${supabaseUrl}/functions/v1/convert-with-ai`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${session.access_token}`,
+              'apikey': supabaseKey,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ courseId, assetId: asset.id }),
+          });
+
+          if (!response.ok) {
+            const err = await response.json().catch(() => ({ error: 'שגיאה לא ידועה' }));
+            throw new Error(err.error || `שגיאה בעיבוד ${asset.original_name}`);
+          }
+
+          const result = await response.json();
+          toast.success(`הקובץ ${asset.original_name} עובד - ${result.sections} פרקים, ${result.questions} שאלות`);
+        }
+
+        await loadCourse();
+      }
     } catch (error: any) {
       toast.error('שגיאה בעיבוד: ' + error.message);
       await (supabase.from('courses') as any)

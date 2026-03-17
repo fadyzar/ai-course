@@ -164,33 +164,55 @@ export function ProcessingStatus({ courseId }: ProcessingStatusProps) {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error('לא מחובר למערכת');
 
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-      if (!supabaseUrl || !supabaseKey) throw new Error('משתני סביבה חסרים');
+      const processingServerUrl = process.env.NEXT_PUBLIC_PROCESSING_SERVER_URL;
+      const queuedJob = jobs.find((j) => j.status === 'queued');
 
-      const response = await fetch(
-        `${supabaseUrl}/functions/v1/worker-process-jobs`,
-        {
+      if (processingServerUrl && queuedJob) {
+        // ── Primary: Processing Server ──────────────────────────────────────
+        const apiKey = process.env.NEXT_PUBLIC_PROCESSING_SERVER_API_KEY || '';
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['X-Api-Key'] = apiKey;
+
+        const response = await fetch(`${processingServerUrl}/process-job`, {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-            'apikey': supabaseKey,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
+          headers,
+          body: JSON.stringify({ jobId: queuedJob.id }),
+        });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Worker failed: ${response.status} ${errorText}`);
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Processing server failed: ${response.status} ${errorText}`);
+        }
+
+        toast.success('עיבוד התחיל בשרת הייעודי');
+      } else {
+        // ── Fallback: Edge Function ─────────────────────────────────────────
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+        const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+        if (!supabaseUrl || !supabaseKey) throw new Error('משתני סביבה חסרים');
+
+        const response = await fetch(
+          `${supabaseUrl}/functions/v1/worker-process-jobs`,
+          {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${session.access_token}`,
+              'apikey': supabaseKey,
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Worker failed: ${response.status} ${errorText}`);
+        }
+
+        const result = await response.json();
+        toast.success(`עובד עיבד ${result.processed || 0} משימות`);
       }
 
-      const result = await response.json();
-      toast.success(`עובד עיבד ${result.processed || 0} משימות`);
-
-      setTimeout(() => {
-        loadJobs();
-      }, 1000);
+      setTimeout(() => { loadJobs(); }, 1500);
     } catch (error: any) {
       toast.error('שגיאה בהפעלת עיבוד: ' + error.message);
     } finally {
