@@ -120,6 +120,8 @@ async function uploadMediaEntry(
 
 // ─── Relationship parsing ─────────────────────────────────────────────────────
 
+const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'avi', 'webm', 'wmv', 'm4v', 'mkv']);
+
 function parseRelationships(relsXml: string): SlideRelationship[] {
   const relationships: SlideRelationship[] = [];
   const relMatches = relsXml.matchAll(
@@ -127,10 +129,17 @@ function parseRelationships(relsXml: string): SlideRelationship[] {
   );
   for (const match of relMatches) {
     const [, rId, type, target] = match;
-    if (type.includes('/image')) relationships.push({ type: 'image', target, rId });
-    else if (type.includes('/video')) relationships.push({ type: 'video', target, rId });
-    else if (type.includes('/hyperlink')) relationships.push({ type: 'hyperlink', target, rId });
-    else relationships.push({ type: 'other', target, rId });
+    const ext = target.split('.').pop()?.toLowerCase() || '';
+    if (type.includes('/image')) {
+      relationships.push({ type: 'image', target, rId });
+    } else if (type.includes('/video') || (type.includes('/media') && VIDEO_EXTENSIONS.has(ext))) {
+      // Modern PowerPoint uses /media for embedded videos (not /video)
+      relationships.push({ type: 'video', target, rId });
+    } else if (type.includes('/hyperlink')) {
+      relationships.push({ type: 'hyperlink', target, rId });
+    } else {
+      relationships.push({ type: 'other', target, rId });
+    }
   }
   return relationships;
 }
@@ -184,6 +193,25 @@ function buildSlideHtml(slide: SlideData, totalSlides: number): string {
     <iframe src="${embedUrl}" style="${S.iframe}"
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
       allowfullscreen></iframe>
+  </div>
+  ${displayText ? `<div style="${S.textBox}"><p style="${S.textContent}">${displayText}</p></div>` : ''}
+</div>`;
+  }
+
+  // ── Embedded video from storage (mp4/mov etc.) ──────────────────────────────
+  // videoStoragePath is a relative bucket path — the viewer (VideoLesson) will
+  // create a signed URL. We still render a placeholder in the HTML.
+  if (slide.videoStoragePath && !slide.externalVideoUrl) {
+    return `<div style="${S.wrap}">
+  <div style="${S.header}">
+    <h2 style="${S.title}">שקופית ${slide.index}</h2>
+    <span style="${S.counter}">${slide.index} / ${totalSlides}</span>
+  </div>
+  <div style="background:#0f172a;border-radius:12px;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;margin-bottom:16px;">
+    <div style="text-align:center;color:#94a3b8;">
+      <div style="font-size:48px;margin-bottom:8px;">▶</div>
+      <p style="font-size:14px;">סרטון מוטמע</p>
+    </div>
   </div>
   ${displayText ? `<div style="${S.textBox}"><p style="${S.textContent}">${displayText}</p></div>` : ''}
 </div>`;
@@ -351,7 +379,8 @@ export async function processPptx(
           const ext = rel.target.split('.').pop()?.toLowerCase() || 'mp4';
           const storagePath = `pptx-media/${assetId}/slide${i + 1}_video.${ext}`;
           const url = await uploadMediaEntry(filePath, zipPath, supabase, storagePath, mimeFromPath(rel.target));
-          if (url) slide.videoStoragePath = url;
+          // Store relative path (not public URL) — VideoLesson.tsx calls createSignedUrl(path)
+          if (url) slide.videoStoragePath = storagePath;
         }
       }
     }

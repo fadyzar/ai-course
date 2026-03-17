@@ -215,135 +215,134 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
     );
   }
 
+  // Group pages by section for sidebar display
+  const sectionGroups = sections.map((section) => ({
+    section,
+    pages: pages
+      .map((p, i) => ({ page: p, index: i }))
+      .filter(({ page }) => page.section_id === section.id),
+  })).filter((g) => g.pages.length > 0);
+
   return (
-    <div className="space-y-4" dir="rtl">
-      <div className="flex items-center justify-between bg-white rounded-xl border border-slate-200 p-3 shadow-sm">
-        <div className="flex items-center gap-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setShowSidebar(!showSidebar)}
-            className="lg:hidden"
-          >
-            <List className="h-4 w-4" />
-          </Button>
-          <div className="text-sm text-slate-600">
-            <span className="font-semibold text-slate-900">עמוד {currentPageIndex + 1}</span>
-            <span className="mx-1">מתוך</span>
-            <span>{pages.length}</span>
-          </div>
-          {currentPage && (
-            <div className="hidden sm:flex items-center gap-1.5">
-              <PageTypeIcon type={currentPage.page_type || 'text'} />
-              <span className="text-xs text-slate-500">
-                {currentPage.page_type === 'video' && 'סרטון'}
-                {currentPage.page_type === 'pdf' && 'PDF'}
-                {currentPage.page_type === 'pptx_slide' && 'שקופית'}
-                {currentPage.page_type === 'quiz' && 'שאלון'}
-                {(!currentPage.page_type || currentPage.page_type === 'text') && 'תוכן'}
-              </span>
-            </div>
-          )}
-        </div>
+    <div className="flex gap-0 h-[calc(100vh-10rem)] -mx-4 sm:-mx-6 lg:-mx-8 overflow-hidden rounded-xl border border-slate-200 shadow-sm" dir="rtl">
 
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => goToPage(currentPageIndex + 1)}
-            disabled={currentPageIndex >= pages.length - 1}
-          >
-            הבא
-            <ChevronLeft className="h-4 w-4 mr-1" />
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => goToPage(currentPageIndex - 1)}
-            disabled={currentPageIndex <= 0}
-          >
-            <ChevronRight className="h-4 w-4 ml-1" />
-            הקודם
-          </Button>
-        </div>
-      </div>
-
-      {totalQuestions > 0 && (
-        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-slate-700">התקדמות בשאלות</span>
-            <span className="text-sm text-slate-600">
-              {answeredQuestions} / {totalQuestions} ({scorePercent}% נכונות)
-            </span>
-          </div>
-          <Progress value={(answeredQuestions / totalQuestions) * 100} className="h-2" />
-        </div>
+      {/* Mobile overlay */}
+      {showSidebar && (
+        <div
+          className="fixed inset-0 bg-black/40 z-30 lg:hidden"
+          onClick={() => setShowSidebar(false)}
+        />
       )}
 
-      <div className="flex gap-6">
-        <div className={`
-          fixed inset-y-0 right-0 z-40 w-72 bg-white border-l border-slate-200 shadow-xl p-4 transition-transform duration-300
-          lg:static lg:z-auto lg:shadow-none lg:border lg:rounded-xl lg:w-64 lg:flex-shrink-0
-          ${showSidebar ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'}
-        `}>
-          {showSidebar && (
-            <div
-              className="fixed inset-0 bg-black/30 z-[-1] lg:hidden"
-              onClick={() => setShowSidebar(false)}
-            />
-          )}
-          <h3 className="text-sm font-bold text-slate-900 mb-3 pb-2 border-b border-slate-200">
-            תוכן הקורס
-          </h3>
-          <div className="space-y-1 overflow-y-auto max-h-[calc(100vh-200px)]">
-            {pages.map((page, index) => {
-              const section = sections.find((s) => s.id === page.section_id);
-              const isActive = index === currentPageIndex;
-              const pageQs = questions.filter((q) => q.page_id === page.id);
-              const answeredAll = pageQs.length > 0 && pageQs.every((q) => answers[q.id]);
-              const label = page.title || section?.title || `עמוד ${index + 1}`;
-
-              return (
-                <button
-                  key={page.id}
-                  onClick={() => goToPage(index)}
-                  className={`w-full text-right p-2.5 rounded-lg text-sm transition-all ${
-                    isActive
-                      ? 'bg-sky-50 text-sky-900 border border-sky-200 font-medium'
-                      : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <PageTypeIcon type={page.page_type || 'text'} />
-                    <span className="flex-1 truncate text-right">{label}</span>
-                    {answeredAll && (
-                      <CheckCircle className="h-3.5 w-3.5 text-emerald-500 flex-shrink-0" />
-                    )}
-                  </div>
-                </button>
-              );
-            })}
+      {/* ── Sidebar ── */}
+      <aside className={`
+        fixed inset-y-0 right-0 z-40 w-72 bg-white border-l border-slate-200 flex flex-col transition-transform duration-300
+        lg:static lg:z-auto lg:w-64 lg:flex-shrink-0 lg:translate-x-0
+        ${showSidebar ? 'translate-x-0' : 'translate-x-full'}
+      `}>
+        {/* Sidebar header */}
+        <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between flex-shrink-0">
+          <span className="text-sm font-bold text-slate-800">תוכן הקורס</span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">{pages.length} עמודים</span>
+            <Button variant="ghost" size="sm" className="lg:hidden h-7 w-7 p-0" onClick={() => setShowSidebar(false)}>
+              ✕
+            </Button>
           </div>
         </div>
 
-        <div className="flex-1 min-w-0 space-y-6">
+        {/* Progress */}
+        {totalQuestions > 0 && (
+          <div className="px-4 py-2.5 border-b border-slate-100 flex-shrink-0">
+            <div className="flex justify-between text-xs text-slate-500 mb-1">
+              <span>שאלות</span>
+              <span>{answeredQuestions}/{totalQuestions} ({scorePercent}%)</span>
+            </div>
+            <Progress value={(answeredQuestions / totalQuestions) * 100} className="h-1.5" />
+          </div>
+        )}
+
+        {/* Page list grouped by section */}
+        <nav className="flex-1 overflow-y-auto py-2">
+          {sectionGroups.map(({ section, pages: sectionPages }) => (
+            <div key={section.id} className="mb-1">
+              <div className="px-4 pt-3 pb-1">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest truncate">
+                  {section.title}
+                </p>
+              </div>
+              {sectionPages.map(({ page, index }) => {
+                const isActive = index === currentPageIndex;
+                const pageQs = questions.filter((q) => q.page_id === page.id);
+                const answeredAll = pageQs.length > 0 && pageQs.every((q) => answers[q.id]);
+                return (
+                  <button
+                    key={page.id}
+                    onClick={() => goToPage(index)}
+                    className={`w-full text-right px-4 py-2 text-sm transition-all flex items-center gap-2 ${
+                      isActive
+                        ? 'bg-sky-50 text-sky-700 border-r-2 border-sky-500 font-medium'
+                        : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 border-r-2 border-transparent'
+                    }`}
+                  >
+                    <PageTypeIcon type={page.page_type || 'text'} />
+                    <span className="flex-1 truncate text-right leading-tight">
+                      {page.title || `עמוד ${index + 1}`}
+                    </span>
+                    {answeredAll && <CheckCircle className="h-3 w-3 text-emerald-500 flex-shrink-0" />}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </nav>
+      </aside>
+
+      {/* ── Main content ── */}
+      <div className="flex-1 min-w-0 flex flex-col bg-slate-50 overflow-hidden">
+        {/* Top bar */}
+        <div className="bg-white border-b border-slate-200 px-4 py-2.5 flex items-center justify-between flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <Button variant="ghost" size="sm" className="lg:hidden h-8 w-8 p-0" onClick={() => setShowSidebar(true)}>
+              <List className="h-4 w-4" />
+            </Button>
+            {currentSection && (
+              <div className="hidden sm:block">
+                <p className="text-xs text-slate-500 leading-none">{currentSection.title}</p>
+                <p className="text-sm font-semibold text-slate-900 leading-snug mt-0.5 max-w-xs truncate">
+                  {currentPage?.title}
+                </p>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-500">{currentPageIndex + 1} / {pages.length}</span>
+            <Button variant="outline" size="sm" onClick={() => goToPage(currentPageIndex - 1)} disabled={currentPageIndex <= 0}>
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => goToPage(currentPageIndex + 1)}
+              disabled={currentPageIndex >= pages.length - 1}
+              className="bg-sky-600 hover:bg-sky-700 text-white"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+
+        {/* Scrollable content */}
+        <div className="flex-1 overflow-y-auto">
           {currentPage && (
-            <>
+            <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
               <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                {currentSection?.title && (
-                  <div className="px-6 pt-5 pb-0">
-                    <p className="text-xs font-semibold text-sky-600 uppercase tracking-wide">
-                      {currentSection.title}
-                    </p>
-                  </div>
-                )}
                 <PageContent page={currentPage} />
               </div>
 
               {pageQuestions.length > 0 && (
                 <div className="space-y-4">
-                  <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                    <span className="inline-block w-1.5 h-6 bg-sky-500 rounded-full"></span>
+                  <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                    <span className="inline-block w-1 h-5 bg-sky-500 rounded-full"></span>
                     שאלות לבדיקת הבנה
                   </h3>
                   {pageQuestions.map((question) => (
@@ -356,51 +355,38 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
                   ))}
                 </div>
               )}
-            </>
-          )}
 
-          <div className="flex items-center justify-between pt-4 border-t border-slate-200">
-            <Button
-              variant="outline"
-              onClick={() => goToPage(currentPageIndex - 1)}
-              disabled={currentPageIndex <= 0}
-            >
-              <ChevronRight className="h-4 w-4 ml-2" />
-              העמוד הקודם
-            </Button>
+              {/* Bottom nav */}
+              <div className="flex items-center justify-between py-2">
+                <Button variant="outline" onClick={() => goToPage(currentPageIndex - 1)} disabled={currentPageIndex <= 0}>
+                  <ChevronRight className="h-4 w-4 ml-2" />
+                  הקודם
+                </Button>
+                {currentPageIndex < pages.length - 1 ? (
+                  <Button onClick={() => goToPage(currentPageIndex + 1)} className="bg-sky-600 hover:bg-sky-700 text-white">
+                    הבא
+                    <ChevronLeft className="h-4 w-4 mr-2" />
+                  </Button>
+                ) : (
+                  <div className="text-sm font-medium text-slate-500">
+                    {answeredQuestions === totalQuestions && totalQuestions > 0
+                      ? `סיימת! ${correctAnswers}/${totalQuestions} נכונות (${scorePercent}%)`
+                      : 'סוף הקורס'}
+                  </div>
+                )}
+              </div>
 
-            {currentPageIndex < pages.length - 1 ? (
-              <Button
-                onClick={() => goToPage(currentPageIndex + 1)}
-                className="bg-sky-600 hover:bg-sky-700 text-white"
-              >
-                העמוד הבא
-                <ChevronLeft className="h-4 w-4 mr-2" />
-              </Button>
-            ) : (
-              answeredQuestions === totalQuestions && totalQuestions > 0 ? (
-                <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-2 text-emerald-800 font-semibold text-sm">
-                  סיימת! {correctAnswers}/{totalQuestions} נכונות ({scorePercent}%)
+              {answeredQuestions === totalQuestions && totalQuestions > 0 && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl py-8 text-center">
+                  <CheckCircle className="h-12 w-12 text-emerald-600 mx-auto mb-3" />
+                  <h3 className="text-xl font-bold text-emerald-900 mb-1">כל הכבוד, סיימת את הקורס!</h3>
+                  <p className="text-emerald-800">{correctAnswers} מתוך {totalQuestions} ({scorePercent}%)</p>
                 </div>
-              ) : (
-                <div className="text-sm text-slate-500">סוף הקורס</div>
-              )
-            )}
-          </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
-
-      {answeredQuestions === totalQuestions && totalQuestions > 0 && (
-        <Card className="border-emerald-300 bg-emerald-50">
-          <CardContent className="py-8 text-center">
-            <CheckCircle className="h-14 w-14 text-emerald-600 mx-auto mb-4" />
-            <h3 className="text-2xl font-bold text-emerald-900 mb-2">כל הכבוד, סיימת את הקורס!</h3>
-            <p className="text-lg text-emerald-800">
-              הציון שלך: {correctAnswers} מתוך {totalQuestions} ({scorePercent}%)
-            </p>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

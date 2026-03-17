@@ -117,24 +117,24 @@ export default function CourseViewPage() {
 
   return (
     <DashboardLayout>
-      <div className="space-y-6">
+      <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-4 space-x-reverse">
+          <div className="flex items-center gap-3">
             <Button variant="ghost" size="sm" asChild>
               <Link href="/dashboard">
-                <ArrowLeft className="h-4 w-4 ml-2" />
+                <ArrowLeft className="h-4 w-4 ml-1" />
                 חזרה
               </Link>
             </Button>
             <div>
-              <h1 className="text-3xl font-bold text-slate-900">{course.title}</h1>
-              <p className="text-slate-600 mt-1">תצוגה מקדימה</p>
+              <h1 className="text-xl font-bold text-slate-900 leading-tight">{course.title}</h1>
             </div>
           </div>
           <div className="flex items-center gap-2">
             <Button
               onClick={handleExportHtml}
               variant="outline"
+              size="sm"
               disabled={isExporting}
             >
               {isExporting ? (
@@ -142,12 +142,12 @@ export default function CourseViewPage() {
               ) : (
                 <Download className="h-4 w-4 ml-2" />
               )}
-              ייצא כ-HTML
+              ייצא HTML
             </Button>
-            <Button asChild>
+            <Button size="sm" asChild>
               <Link href={`/course/${courseId}/builder`}>
                 <Edit className="h-4 w-4 ml-2" />
-                ערוך קורס
+                ערוך
               </Link>
             </Button>
           </div>
