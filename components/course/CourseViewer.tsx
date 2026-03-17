@@ -38,23 +38,33 @@ function PageTypeIcon({ type }: { type: string }) {
 
 function PageContent({ page }: { page: Page }) {
   if (page.page_type === 'video') {
-    if (!page.video_storage_path) {
+    // Embedded video file in Supabase Storage
+    if (page.video_storage_path) {
       return (
-        <div className="p-8 text-center text-slate-500">
-          <Video className="h-10 w-10 mx-auto mb-3 text-slate-300" />
-          <p>נתיב הסרטון אינו זמין</p>
+        <div className="p-6">
+          <VideoLesson storagePath={page.video_storage_path} title={page.title} />
+          {page.html_content && page.html_content.trim().length > 0 && (
+            <div
+              dangerouslySetInnerHTML={{ __html: page.html_content }}
+              className="mt-6 prose prose-slate max-w-none"
+            />
+          )}
         </div>
       );
     }
+    // YouTube / Vimeo embed — stored as html_content with iframe
+    if (page.html_content && page.html_content.trim().length > 0) {
+      return (
+        <div
+          dangerouslySetInnerHTML={{ __html: page.html_content }}
+          className="p-4"
+        />
+      );
+    }
     return (
-      <div className="p-6">
-        <VideoLesson storagePath={page.video_storage_path} title={page.title} />
-        {page.html_content && page.html_content.trim().length > 0 && (
-          <div
-            dangerouslySetInnerHTML={{ __html: page.html_content }}
-            className="mt-6 prose prose-slate max-w-none"
-          />
-        )}
+      <div className="p-8 text-center text-slate-500">
+        <Video className="h-10 w-10 mx-auto mb-3 text-slate-300" />
+        <p>נתיב הסרטון אינו זמין</p>
       </div>
     );
   }
@@ -128,9 +138,19 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
           .eq('course_id', courseId),
       ]);
 
-      setSections(sectionsResult.data || []);
-      setPages(pagesResult.data || []);
-      setQuestions(questionsResult.data || []);
+      // Deduplicate by id to prevent React key errors on double-processing
+      const uniqueSections = Array.from(
+        new Map((sectionsResult.data || []).map((s) => [s.id, s])).values()
+      );
+      const uniquePages = Array.from(
+        new Map((pagesResult.data || []).map((p) => [p.id, p])).values()
+      );
+      const uniqueQuestions = Array.from(
+        new Map((questionsResult.data || []).map((q) => [q.id, q])).values()
+      );
+      setSections(uniqueSections);
+      setPages(uniquePages);
+      setQuestions(uniqueQuestions);
     } catch (error) {
       console.error('Error loading course content:', error);
     } finally {

@@ -147,79 +147,75 @@ function resolveMediaZipPath(slideFile: string, target: string): string {
 function buildSlideHtml(slide: SlideData, totalSlides: number): string {
   const displayText = escapeHtml(sanitizeText(slide.aiSummary || slide.text));
 
+  const S = {
+    wrap: 'direction:rtl;font-family:"Segoe UI",Arial,sans-serif;padding:8px 0;',
+    header: 'display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #e2e8f0;padding-bottom:14px;margin-bottom:20px;',
+    title: 'font-size:22px;font-weight:700;color:#0f172a;margin:0;',
+    counter: 'font-size:13px;color:#94a3b8;',
+    textBox: 'background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:24px;margin-bottom:16px;',
+    textContent: 'font-size:16px;line-height:1.8;color:#1e293b;white-space:pre-wrap;margin:0;',
+    videoWrap: 'position:relative;width:100%;padding-bottom:56.25%;height:0;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.12);margin-bottom:16px;',
+    iframe: 'position:absolute;top:0;left:0;width:100%;height:100%;border:0;',
+    imgWrap: 'border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;margin-bottom:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);',
+    img: 'width:100%;height:auto;max-height:420px;object-fit:contain;background:#f8fafc;display:block;',
+    chapterWrap: 'display:flex;align-items:center;justify-content:center;min-height:50vh;',
+    chapterInner: 'text-align:center;',
+    chapterBadge: 'display:inline-flex;align-items:center;justify-content:center;width:64px;height:64px;background:#dbeafe;border-radius:16px;margin-bottom:16px;',
+    chapterNum: 'font-size:24px;font-weight:700;color:#2563eb;',
+    chapterTitle: 'font-size:36px;font-weight:800;color:#0f172a;margin:0;',
+  };
+
+  // ── YouTube / Vimeo ──────────────────────────────────────────────────────────
   if (slide.externalVideoUrl) {
-    const videoIdMatch = slide.externalVideoUrl.match(
-      /(?:youtu\.be\/|watch\?v=|embed\/)([A-Za-z0-9_-]{11})/
-    );
-    const isYoutube =
-      slide.externalVideoUrl.includes('youtube.com') ||
-      slide.externalVideoUrl.includes('youtu.be');
-    const embedUrl = isYoutube && videoIdMatch
-      ? `https://www.youtube.com/embed/${videoIdMatch[1]}`
+    const ytMatch = slide.externalVideoUrl.match(/(?:youtu\.be\/|watch\?v=|embed\/)([A-Za-z0-9_-]{11})/);
+    const isYoutube = slide.externalVideoUrl.includes('youtube.com') || slide.externalVideoUrl.includes('youtu.be');
+    const embedUrl = isYoutube && ytMatch
+      ? `https://www.youtube.com/embed/${ytMatch[1]}?rel=0`
       : slide.externalVideoUrl.includes('vimeo.com')
       ? `https://player.vimeo.com/video/${slide.externalVideoUrl.split('vimeo.com/')[1]}`
       : slide.externalVideoUrl;
 
-    return `<div dir="rtl" class="max-w-4xl mx-auto space-y-6 py-4">
-  <div class="border-b border-slate-200 pb-3 flex items-center justify-between">
-    <h2 class="text-2xl font-bold text-slate-900">שקופית ${slide.index}</h2>
-    <span class="text-sm text-slate-400">${slide.index} / ${totalSlides}</span>
+    return `<div style="${S.wrap}">
+  <div style="${S.header}">
+    <h2 style="${S.title}">שקופית ${slide.index}</h2>
+    <span style="${S.counter}">${slide.index} / ${totalSlides}</span>
   </div>
-  <div class="aspect-video w-full rounded-xl overflow-hidden shadow-lg">
-    <iframe src="${embedUrl}" class="w-full h-full" frameborder="0"
+  <div style="${S.videoWrap}">
+    <iframe src="${embedUrl}" style="${S.iframe}"
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
       allowfullscreen></iframe>
   </div>
-  ${displayText ? `<div class="bg-slate-50 p-4 rounded-xl border border-slate-200">
-    <p class="text-slate-700 leading-relaxed text-sm">${displayText}</p>
-  </div>` : ''}
+  ${displayText ? `<div style="${S.textBox}"><p style="${S.textContent}">${displayText}</p></div>` : ''}
 </div>`;
   }
 
-  if (slide.videoStoragePath) {
-    return `<div dir="rtl" class="max-w-4xl mx-auto space-y-6 py-4">
-  <div class="border-b border-slate-200 pb-3 flex items-center justify-between">
-    <h2 class="text-2xl font-bold text-slate-900">שקופית ${slide.index}</h2>
-    <span class="text-sm text-slate-400">${slide.index} / ${totalSlides}</span>
-  </div>
-  <div class="aspect-video w-full rounded-xl overflow-hidden shadow-lg bg-black">
-    <video controls class="w-full h-full" preload="metadata">
-      <source src="${slide.videoStoragePath}" />
-    </video>
-  </div>
-  ${displayText ? `<div class="bg-slate-50 p-4 rounded-xl border border-slate-200">
-    <p class="text-slate-700 leading-relaxed text-sm">${displayText}</p>
-  </div>` : ''}
-</div>`;
-  }
-
+  // ── Chapter / title slide ────────────────────────────────────────────────────
   if (slide.isChapterSlide) {
-    return `<div dir="rtl" class="max-w-4xl mx-auto py-4">
-  <div class="flex items-center justify-center min-h-[40vh]">
-    <div class="text-center space-y-4">
-      <div class="inline-flex items-center justify-center w-16 h-16 bg-blue-100 rounded-2xl mb-4">
-        <span class="text-2xl font-bold text-blue-600">${slide.index}</span>
+    return `<div style="${S.wrap}">
+  <div style="${S.chapterWrap}">
+    <div style="${S.chapterInner}">
+      <div style="${S.chapterBadge}">
+        <span style="${S.chapterNum}">${slide.index}</span>
       </div>
-      <h1 class="text-4xl font-bold text-slate-900">${escapeHtml(sanitizeText(slide.text))}</h1>
+      <h1 style="${S.chapterTitle}">${escapeHtml(sanitizeText(slide.text))}</h1>
     </div>
   </div>
 </div>`;
   }
 
+  // ── Regular slide ────────────────────────────────────────────────────────────
   const imageHtml = (slide.imageUrls || [])
-    .map((url) => `<div class="rounded-xl overflow-hidden border border-slate-200 shadow-sm">
-    <img src="${url}" alt="תמונה מהשקופית" class="w-full h-auto max-h-96 object-contain bg-slate-50" loading="lazy" />
+    .map((url) => `<div style="${S.imgWrap}">
+    <img src="${url}" alt="תמונה מהשקופית" style="${S.img}" loading="lazy" />
   </div>`)
-    .join('\n');
+    .join('');
 
-  return `<div dir="rtl" class="max-w-4xl mx-auto space-y-6 py-4">
-  <div class="border-b border-slate-200 pb-3 flex items-center justify-between">
-    <h2 class="text-2xl font-bold text-slate-900">שקופית ${slide.index}</h2>
-    <span class="text-sm text-slate-400">${slide.index} / ${totalSlides}</span>
+  return `<div style="${S.wrap}">
+  <div style="${S.header}">
+    <h2 style="${S.title}">שקופית ${slide.index}</h2>
+    <span style="${S.counter}">${slide.index} / ${totalSlides}</span>
   </div>
-  ${displayText ? `<div class="bg-slate-50 p-6 rounded-xl border border-slate-200">
-    <p class="text-slate-800 leading-relaxed whitespace-pre-wrap">${displayText}</p>
-  </div>` : ''}
+  ${displayText ? `<div style="${S.textBox}"><p style="${S.textContent}">${displayText}</p></div>` : ''}
   ${imageHtml}
 </div>`;
 }

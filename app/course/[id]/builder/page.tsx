@@ -78,9 +78,12 @@ export default function CourseBuilderPage() {
           setCourse(updatedCourse);
 
           if (updatedCourse.status === 'ready') {
-            toast.success('הקורס מוכן! אפשר לצפות בו עכשיו.');
+            toast.success('הקורס מוכן! עובר לצפייה...');
+            setTimeout(() => {
+              router.push(`/course/${courseId}/view`);
+            }, 1500);
           } else if (updatedCourse.status === 'processing') {
-            toast.info('מעבד את הקורס... זה יכול לקחת כמה רגעים');
+            toast.info('מעבד את הקורס...');
           }
         }
       )
