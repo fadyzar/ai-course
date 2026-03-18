@@ -93,59 +93,146 @@ async function tryGraphApi(shareUrl: string): Promise<Response | null> {
 }
 
 /**
+ * When OneDrive returns an HTML page instead of the file, extract the real download URL from the HTML.
+ * Works for SPO-migrated consumer OneDrive files.
+ */
+async function tryExtractDownloadUrlFromHtml(htmlUrl: string): Promise<Response | null> {
+  try {
+    const htmlResp = await fetch(htmlUrl, {
+      redirect: 'follow',
+      headers: { 'User-Agent': BROWSER_UA, Accept: 'text/html,*/*' },
+    });
+    const ct = htmlResp.headers.get('content-type') || '';
+    if (!ct.includes('text/html')) return htmlResp; // Already a file!
+    if (!htmlResp.ok) { await htmlResp.body?.cancel(); return null; }
+
+    const html = await htmlResp.text();
+
+    // Patterns Microsoft embeds in the OneDrive download HTML page
+    const patterns = [
+      /"downloadUrl"\s*:\s*"(https:[^"\\]+(?:\\.[^"\\]*)*)"/,
+      /"download_url"\s*:\s*"(https:[^"\\]+(?:\\.[^"\\]*)*)"/,
+      /download_href['":\s]+=?\s*['"]?(https:\/\/[^'"&\s<>]+)/i,
+      /"FileUrl"\s*:\s*"(https:[^"\\]+(?:\\.[^"\\]*)*)"/,
+      /href="(https:\/\/[^"]*\.(?:pptx|pdf|docx|ppt)[^"]*)"/i,
+    ];
+
+    for (const pattern of patterns) {
+      const match = html.match(pattern);
+      if (match) {
+        const dlUrl = match[1]
+          .replace(/\\u0026/g, '&')
+          .replace(/\\u002F/gi, '/')
+          .replace(/\\\//g, '/');
+        logger.info({ dlUrl }, '[URL-FETCH] Extracted download URL from OneDrive HTML');
+        const fileResp = await fetch(dlUrl, { redirect: 'follow', headers: { 'User-Agent': BROWSER_UA } });
+        const fileCt = fileResp.headers.get('content-type') || '';
+        if (fileResp.ok && !fileCt.includes('text/html')) return fileResp;
+        await fileResp.body?.cancel();
+      }
+    }
+  } catch (e: any) {
+    logger.debug({ err: e.message }, '[URL-FETCH] HTML extraction failed');
+  }
+  return null;
+}
+
+/** Extract GUID from resid like "811060D19EFD38F0!s18b74523c94d46298362cc3c9bf218e0" */
+function extractUniqueIdFromResid(resid: string): string | null {
+  const match = resid.match(/!s([0-9a-f]{32})$/i);
+  if (!match) return null;
+  const h = match[1].toLowerCase();
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
+/**
  * Strategy 1b: Consumer OneDrive (onedrive.live.com / 1drv.ms)
- * Follow redirects to get resid+authkey from the final URL, then build a direct download URL.
- * This is the most reliable method for personal OneDrive share links.
+ * Handles both regular and SPO-migrated (migratedtospo=true) files.
  */
 async function tryConsumerOneDriveDirectDownload(url: string): Promise<Response | null> {
   try {
-    // Follow redirects — but skip if we land on a login page
-    const headResp = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-      headers: { 'User-Agent': BROWSER_UA },
-    });
+    // Follow redirects — skip if we land on a login page
+    const headResp = await fetch(url, { method: 'GET', redirect: 'follow', headers: { 'User-Agent': BROWSER_UA } });
     const finalUrl = headResp.url || url;
     await headResp.body?.cancel();
 
-    // If we landed on a login page, don't bother parsing it
     const isLoginPage = finalUrl.includes('login.live.com') || finalUrl.includes('login.microsoftonline.com');
-
-    // Try building download URLs from the original URL (and the final URL if it's not a login page)
     const candidates = isLoginPage ? [url] : [url, finalUrl];
+
     for (const candidate of candidates) {
       try {
         const parsed = new URL(candidate);
-        if (parsed.hostname === 'onedrive.live.com') {
-          const resid = parsed.searchParams.get('resid');
-          const authkey = parsed.searchParams.get('authkey');
-          const eParam = parsed.searchParams.get('e'); // sharing token — acts as authkey with '!' prefix
+        if (parsed.hostname !== 'onedrive.live.com') continue;
 
-          if (!resid) continue;
+        const resid = parsed.searchParams.get('resid');
+        const authkey = parsed.searchParams.get('authkey');
+        const eParam = parsed.searchParams.get('e');
+        const migratedToSpo = parsed.searchParams.get('migratedtospo') === 'true';
 
-          // Build all authkey variants to try
-          const authkeyVariants: string[] = [];
-          if (authkey) authkeyVariants.push(authkey);
-          if (eParam) {
-            authkeyVariants.push(`!${eParam}`); // '!' prefix is the standard OneDrive authkey format
-            authkeyVariants.push(eParam);
-          }
-          authkeyVariants.push(''); // try without authkey too (for truly public files)
+        if (!resid) continue;
 
-          for (const ak of authkeyVariants) {
-            const dlUrl = ak
-              ? `https://onedrive.live.com/download?resid=${encodeURIComponent(resid)}&authkey=${encodeURIComponent(ak)}`
-              : `https://onedrive.live.com/download?resid=${encodeURIComponent(resid)}`;
-            logger.info({ dlUrl }, '[URL-FETCH] Trying OneDrive direct download');
-            const dlResp = await fetch(dlUrl, { redirect: 'follow', headers: { 'User-Agent': BROWSER_UA } });
-            const ct = dlResp.headers.get('content-type') || '';
-            logger.info({ status: dlResp.status, ct }, '[URL-FETCH] OneDrive direct download response');
-            if (dlResp.ok && !ct.includes('text/html')) {
-              return dlResp;
-            }
+        // Build authkey variants
+        const authkeys: string[] = [];
+        if (authkey) authkeys.push(authkey);
+        if (eParam) { authkeys.push(`!${eParam}`); authkeys.push(eParam); }
+
+        // === Standard /download endpoint ===
+        for (const ak of authkeys) {
+          const dlUrl = `https://onedrive.live.com/download?resid=${encodeURIComponent(resid)}&authkey=${encodeURIComponent(ak)}`;
+          logger.info({ dlUrl }, '[URL-FETCH] Trying OneDrive /download');
+          const dlResp = await fetch(dlUrl, { redirect: 'follow', headers: { 'User-Agent': BROWSER_UA } });
+          const dlCt = dlResp.headers.get('content-type') || '';
+          logger.info({ status: dlResp.status, ct: dlCt }, '[URL-FETCH] /download response');
+          if (dlResp.ok && !dlCt.includes('text/html')) return dlResp;
+          // If 200 HTML, Microsoft is showing a download page — try to extract the real URL from it
+          if (dlResp.ok && dlCt.includes('text/html') && migratedToSpo) {
+            const extracted = await tryExtractDownloadUrlFromHtml(dlUrl);
+            if (extracted) return extracted;
+            await dlResp.body?.cancel();
+          } else {
             await dlResp.body?.cancel();
           }
         }
+
+        // === SPO UniqueId-based download (for migratedtospo=true files) ===
+        if (migratedToSpo) {
+          const uniqueId = extractUniqueIdFromResid(resid);
+          if (uniqueId) {
+            const cid = resid.split('!')[0].toLowerCase();
+            for (const ak of authkeys) {
+              // Try UniqueId download endpoint
+              const dlUrl = `https://onedrive.live.com/download?UniqueId=${uniqueId}&authkey=${encodeURIComponent(ak)}`;
+              logger.info({ dlUrl }, '[URL-FETCH] Trying SPO UniqueId download');
+              const dlResp = await fetch(dlUrl, { redirect: 'follow', headers: { 'User-Agent': BROWSER_UA } });
+              const dlCt = dlResp.headers.get('content-type') || '';
+              logger.info({ status: dlResp.status, ct: dlCt }, '[URL-FETCH] UniqueId download response');
+              if (dlResp.ok && !dlCt.includes('text/html')) return dlResp;
+              await dlResp.body?.cancel();
+
+              // Try SharePoint-style _layouts/15/download.aspx
+              const spoUrl = `https://onedrive.live.com/personal/${cid.toUpperCase()}/_layouts/15/download.aspx?UniqueId=${uniqueId}&authkey=${encodeURIComponent(ak)}`;
+              logger.info({ spoUrl }, '[URL-FETCH] Trying SPO _layouts download');
+              const spoResp = await fetch(spoUrl, { redirect: 'follow', headers: { 'User-Agent': BROWSER_UA } });
+              const spoCt = spoResp.headers.get('content-type') || '';
+              logger.info({ status: spoResp.status, ct: spoCt }, '[URL-FETCH] SPO _layouts response');
+              if (spoResp.ok && !spoCt.includes('text/html')) return spoResp;
+              await spoResp.body?.cancel();
+            }
+          }
+        }
+
+        // === Try original URL with &download=1 (works for some SPO-style URLs) ===
+        const downloadParam = candidate.includes('?') ? `${candidate}&download=1` : `${candidate}?download=1`;
+        const dp1Resp = await fetch(downloadParam, { redirect: 'follow', headers: { 'User-Agent': BROWSER_UA } });
+        const dp1Ct = dp1Resp.headers.get('content-type') || '';
+        logger.info({ status: dp1Resp.status, ct: dp1Ct, url: downloadParam }, '[URL-FETCH] &download=1 on original URL');
+        if (dp1Resp.ok && !dp1Ct.includes('text/html')) return dp1Resp;
+        if (dp1Resp.ok && dp1Ct.includes('text/html')) {
+          const extracted = await tryExtractDownloadUrlFromHtml(downloadParam);
+          if (extracted) return extracted;
+        }
+        await dp1Resp.body?.cancel();
+
       } catch { /* ignore */ }
     }
   } catch (e: any) {
