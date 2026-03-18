@@ -66,6 +66,7 @@ async function tryGraphApi(shareUrl: string): Promise<Response | null> {
     const metaResp = await fetch(metaUrl, {
       headers: { 'User-Agent': BROWSER_UA, Accept: 'application/json' },
     });
+    logger.info({ metaUrl, status: metaResp.status }, '[URL-FETCH] Graph API driveItem response');
     if (metaResp.ok) {
       const meta = await metaResp.json() as Record<string, unknown>;
       const dlUrl = meta['@microsoft.graph.downloadUrl'] as string | undefined;
@@ -86,7 +87,7 @@ async function tryGraphApi(shareUrl: string): Promise<Response | null> {
       return contentResp;
     }
   } catch (e: any) {
-    logger.debug({ err: e.message }, '[URL-FETCH] Graph API failed');
+    logger.info({ err: e.message }, '[URL-FETCH] Graph API exception');
   }
   return null;
 }
@@ -98,31 +99,51 @@ async function tryGraphApi(shareUrl: string): Promise<Response | null> {
  */
 async function tryConsumerOneDriveDirectDownload(url: string): Promise<Response | null> {
   try {
-    // Follow redirects to get the resolved URL (may be onedrive.live.com/view.aspx?resid=...&authkey=...)
+    // Follow redirects — but skip if we land on a login page
     const headResp = await fetch(url, {
       method: 'GET',
       redirect: 'follow',
       headers: { 'User-Agent': BROWSER_UA },
     });
     const finalUrl = headResp.url || url;
+    await headResp.body?.cancel();
 
-    // Try building a direct download URL from the resid+authkey in the final (or original) URL
-    for (const candidate of [finalUrl, url]) {
+    // If we landed on a login page, don't bother parsing it
+    const isLoginPage = finalUrl.includes('login.live.com') || finalUrl.includes('login.microsoftonline.com');
+
+    // Try building download URLs from the original URL (and the final URL if it's not a login page)
+    const candidates = isLoginPage ? [url] : [url, finalUrl];
+    for (const candidate of candidates) {
       try {
         const parsed = new URL(candidate);
         if (parsed.hostname === 'onedrive.live.com') {
           const resid = parsed.searchParams.get('resid');
           const authkey = parsed.searchParams.get('authkey');
-          if (resid) {
-            const dlUrl = `https://onedrive.live.com/download?resid=${encodeURIComponent(resid)}&authkey=${encodeURIComponent(authkey || '')}`;
-            logger.info({ dlUrl }, '[URL-FETCH] Trying consumer OneDrive direct download URL');
-            const dlResp = await fetch(dlUrl, {
-              redirect: 'follow',
-              headers: { 'User-Agent': BROWSER_UA },
-            });
-            if (dlResp.ok && !(dlResp.headers.get('content-type') || '').includes('text/html')) {
+          const eParam = parsed.searchParams.get('e'); // sharing token — acts as authkey with '!' prefix
+
+          if (!resid) continue;
+
+          // Build all authkey variants to try
+          const authkeyVariants: string[] = [];
+          if (authkey) authkeyVariants.push(authkey);
+          if (eParam) {
+            authkeyVariants.push(`!${eParam}`); // '!' prefix is the standard OneDrive authkey format
+            authkeyVariants.push(eParam);
+          }
+          authkeyVariants.push(''); // try without authkey too (for truly public files)
+
+          for (const ak of authkeyVariants) {
+            const dlUrl = ak
+              ? `https://onedrive.live.com/download?resid=${encodeURIComponent(resid)}&authkey=${encodeURIComponent(ak)}`
+              : `https://onedrive.live.com/download?resid=${encodeURIComponent(resid)}`;
+            logger.info({ dlUrl }, '[URL-FETCH] Trying OneDrive direct download');
+            const dlResp = await fetch(dlUrl, { redirect: 'follow', headers: { 'User-Agent': BROWSER_UA } });
+            const ct = dlResp.headers.get('content-type') || '';
+            logger.info({ status: dlResp.status, ct }, '[URL-FETCH] OneDrive direct download response');
+            if (dlResp.ok && !ct.includes('text/html')) {
               return dlResp;
             }
+            await dlResp.body?.cancel();
           }
         }
       } catch { /* ignore */ }
