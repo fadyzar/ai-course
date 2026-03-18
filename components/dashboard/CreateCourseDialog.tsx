@@ -103,12 +103,14 @@ function buildOneDriveDirectUrl(url: string): string {
   try {
     const parsed = new URL(url);
 
-    // onedrive.live.com/redir?... → download
+    // onedrive.live.com — בנה URL הורדה ישיר
     if (parsed.hostname === 'onedrive.live.com') {
       const resid = parsed.searchParams.get('resid');
       const authkey = parsed.searchParams.get('authkey');
+      const eParam = parsed.searchParams.get('e'); // sharing token = authkey עם ! לפניו
       if (resid) {
-        return `https://onedrive.live.com/download?resid=${encodeURIComponent(resid)}&authkey=${encodeURIComponent(authkey || '')}`;
+        const ak = authkey || (eParam ? `!${eParam}` : '');
+        return `https://onedrive.live.com/download?resid=${encodeURIComponent(resid)}&authkey=${encodeURIComponent(ak)}`;
       }
     }
 
@@ -142,19 +144,32 @@ async function downloadOneDriveInBrowser(
 
   onProgress(10);
 
-  const response = await fetch(finalUrl, {
-    method: 'GET',
-    redirect: 'follow',
-  });
+  // נסה קודם עם cookies (למשתמש מחובר ל-OneDrive) — עובד עבור קבצי SPO-migrated
+  // אם CORS חוסם, נסה בלי credentials
+  let response: Response | null = null;
+  let lastError = '';
 
-  if (!response.ok) {
-    throw new Error(`שגיאה בהורדה מ-OneDrive: ${response.status}. ודא שהקובץ משותף ציבורית.`);
+  for (const credMode of ['include', 'omit'] as RequestCredentials[]) {
+    try {
+      const r = await fetch(finalUrl, { method: 'GET', redirect: 'follow', credentials: credMode });
+      const ct = r.headers.get('content-type') || '';
+      if (r.ok && !ct.includes('text/html')) {
+        response = r;
+        break;
+      }
+      lastError = ct.includes('text/html')
+        ? `OneDrive מחזיר דף HTML (${credMode})`
+        : `שגיאה ${r.status}`;
+    } catch {
+      lastError = `CORS blocked (${credMode})`;
+    }
+  }
+
+  if (!response) {
+    throw new Error('לא ניתן להוריד את הקובץ מ-OneDrive: ' + lastError);
   }
 
   const contentType = response.headers.get('content-type') || '';
-  if (contentType.includes('text/html')) {
-    throw new Error('OneDrive מחזיר דף HTML — ודא שהקישור הוא "כל מי שיש לו קישור יכול להציג" ושהעתקת את קישור ההורדה הישיר.');
-  }
 
   onProgress(30);
 
@@ -376,8 +391,39 @@ export function CreateCourseDialog() {
           });
 
           if (!fetchResp.ok) {
-            const err = await fetchResp.json().catch(() => ({ error: 'שגיאה בהורדת הקובץ' }));
-            throw new Error(err.error || 'שגיאה בהורדת הקובץ');
+            if (sourceType === 'onedrive') {
+              // שרת לא הצליח — נסה הורדה ישירה בדפדפן (עובד כשהמשתמש מחובר ל-OneDrive)
+              setStatusMsg('מנסה הורדה ישירה דרך הדפדפן...');
+              setUploadProgress(0);
+              let file: File;
+              try {
+                file = await downloadOneDriveInBrowser(sourceUrl.trim(), setUploadProgress);
+              } catch (browserErr: any) {
+                throw new Error(
+                  'לא ניתן להוריד את הקובץ מ-OneDrive. ' +
+                  'ודא שהגדרות השיתוף הן "כל מי שיש לו קישור — ללא צורך בכניסה", ' +
+                  'או הורד את הקובץ ידנית והעלה אותו ישירות.'
+                );
+              }
+              // העלה לסופרבייס כמו קובץ רגיל
+              setStatusMsg('מעלה קובץ...');
+              const ext = file.name.split('.').pop()?.toLowerCase() || 'pptx';
+              const sanitizedName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+              const storagePath = `${course.id}/${Date.now()}_${sanitizedName}`;
+              await uploadLargeFile('course-assets', storagePath, file, setUploadProgress);
+              const { error: assetError } = await (supabase.from('course_assets') as any).insert({
+                course_id: course.id,
+                file_type: ext,
+                storage_path: storagePath,
+                original_name: file.name,
+                size_bytes: file.size,
+                status: 'uploaded',
+              });
+              if (assetError) throw assetError;
+            } else {
+              const err = await fetchResp.json().catch(() => ({ error: 'שגיאה בהורדת הקובץ' }));
+              throw new Error(err.error || 'שגיאה בהורדת הקובץ');
+            }
           }
         } else {
           // Fallback: Supabase edge function
