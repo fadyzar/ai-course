@@ -7,6 +7,7 @@ import { QuestionBlock } from './QuestionBlock';
 import { VideoLesson } from './VideoLesson';
 import { PdfPageViewer } from './PdfPageViewer';
 import { ManualQuestionDialog } from './ManualQuestionDialog';
+import { useAuth } from '@/contexts/AuthContext';
 import {
   CheckCircle2, ChevronRight, ChevronLeft, ChevronDown, ChevronUp,
   BookOpen, Video, FileText, Presentation, ClipboardList,
@@ -98,6 +99,8 @@ function PageContent({ page, dark }: { page: Page; dark: boolean }) {
 
 /* ─── Main component ─────────────────────────────────────────────── */
 export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseViewerProps) {
+  const { profile } = useAuth();
+  const isTeacher = profile?.role === 'teacher' || profile?.role === 'admin';
   const [sections, setSections]                       = useState<Section[]>([]);
   const [pages, setPages]                             = useState<Page[]>([]);
   const [questions, setQuestions]                     = useState<Question[]>([]);
@@ -257,7 +260,11 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
       ══════════════════════════════════════════ */}
       <div style={{
         position: 'sticky', top: 64, zIndex: 40, height: 52,
-        background: T.topbarBg, borderBottom: `1px solid ${T.topbarBorder}`,
+        background: T.topbarBg,
+        borderBottom: `1px solid ${T.topbarBorder}`,
+        boxShadow: dark
+          ? '0 2px 8px rgba(0,0,0,0.5)'
+          : '0 2px 8px rgba(0,0,0,0.06)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '0 16px', gap: 12,
       }}>
@@ -369,8 +376,8 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
           {/* Vertical separator */}
           <div style={{ width: 1, height: 20, background: T.btnBorder, flexShrink: 0 }} />
 
-          {/* Add question button */}
-          {!isPreview && (
+          {/* Add question button — teachers only */}
+          {isTeacher && !isPreview && (
             <button
               onClick={() => setShowAddQuestion(true)}
               title="הוסף שאלה"
@@ -716,7 +723,7 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
       </div>
 
       {/* ── Add Question Dialog ── */}
-      {!isPreview && (
+      {isTeacher && !isPreview && (
         <ManualQuestionDialog
           courseId={courseId}
           pageId={currentPage?.id}

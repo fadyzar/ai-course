@@ -1,8 +1,10 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { getAdminClient } from '../utils/supabase.js';
 import { processAsset, processJobById } from '../services/asset-processing.service.js';
+import { fetchUrlToTempFile, storeFetchedFile } from '../services/url-fetch.service.js';
 import { ProcessAssetRequest, ProcessJobRequest, ProcessingResponse } from '../types/index.js';
 import { logger } from '../utils/logger.js';
+import { unlink } from 'fs/promises';
 
 // In-process set to prevent the same jobId from being dispatched twice
 // before the DB atomic update completes (handles same-process double-requests)
@@ -83,6 +85,37 @@ export async function handleProcessJob(
   });
 
   return { success: true, jobId };
+}
+
+export async function handleFetchUrl(
+  request: FastifyRequest<{ Body: { url: string; courseId: string } }>,
+  reply: FastifyReply
+) {
+  const { url, courseId } = request.body;
+  if (!url || !courseId) {
+    return reply.status(400).send({ success: false, error: 'url and courseId are required' });
+  }
+
+  logger.info({ url, courseId }, '[CONTROLLER] fetch-url request');
+
+  let tmpPath: string | null = null;
+  try {
+    const supabase = getAdminClient();
+
+    const { tmpPath: tp, contentType, filename, sizeBytes } = await fetchUrlToTempFile(url);
+    tmpPath = tp;
+
+    const { storagePath, assetId } = await storeFetchedFile(supabase, {
+      courseId, tmpPath, filename, contentType, sizeBytes,
+    });
+
+    return reply.send({ success: true, storagePath, assetId, filename, sizeBytes });
+  } catch (err: any) {
+    logger.error({ url, courseId, err: err.message }, '[CONTROLLER] fetch-url failed');
+    return reply.status(500).send({ success: false, error: err.message });
+  } finally {
+    if (tmpPath) await unlink(tmpPath).catch(() => {});
+  }
 }
 
 export async function handleProcessJobSync(

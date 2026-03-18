@@ -356,70 +356,48 @@ export function CreateCourseDialog() {
         router.push(`/course/${course.id}/builder`);
         triggerConvert(course.id, session);
 
-      } else if (sourceType === 'onedrive' && sourceUrl.trim()) {
-        // === OneDrive: הורדה בדפדפן + העלאה ===
-        setStatusMsg('מוריד קובץ מ-OneDrive...');
+      } else if ((sourceType === 'google_drive' || sourceType === 'onedrive' || sourceType === 'canva') && sourceUrl.trim()) {
+        // === External URL: processing server (preferred) or Supabase edge function ===
+        const sourceName = sourceType === 'onedrive' ? 'OneDrive' : sourceType === 'google_drive' ? 'Google Drive' : 'Canva';
+        setStatusMsg(`מוריד קובץ מ-${sourceName}...`);
 
-        let downloadedFile: File;
-        try {
-          downloadedFile = await downloadOneDriveInBrowser(
-            sourceUrl.trim(),
-            (pct) => {
-              setUploadProgress(Math.round(pct * 0.5)); // 0–50% = הורדה
-              if (pct < 30) setStatusMsg('מתחבר ל-OneDrive...');
-              else if (pct < 90) setStatusMsg(`מוריד קובץ... ${Math.round(pct)}%`);
-              else setStatusMsg('מסיים הורדה...');
-            }
-          );
-        } catch (err: any) {
-          throw new Error(err.message || 'שגיאה בהורדה מ-OneDrive');
-        }
+        const processingServerUrl = process.env.NEXT_PUBLIC_PROCESSING_SERVER_URL;
+        const apiKey = process.env.NEXT_PUBLIC_PROCESSING_SERVER_API_KEY || '';
 
-        setStatusMsg('מעלה לשרת...');
-        const ext = downloadedFile.name.split('.').pop()?.toLowerCase() || 'pptx';
-        const sanitizedName = downloadedFile.name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-        const storagePath = `${course.id}/${Date.now()}_${sanitizedName}`;
+        if (processingServerUrl) {
+          // Use processing server — Node.js, no CORS, no memory limits, streaming
+          const fetchResp = await fetch(`${processingServerUrl}/fetch-url`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(apiKey ? { 'x-api-key': apiKey } : {}),
+            },
+            body: JSON.stringify({ courseId: course.id, url: sourceUrl.trim() }),
+          });
 
-        await uploadLargeFile('course-assets', storagePath, downloadedFile, (pct) => {
-          setUploadProgress(50 + Math.round(pct * 0.5)); // 50–100% = העלאה
-          setStatusMsg(`מעלה לשרת... ${pct}%`);
-        });
+          if (!fetchResp.ok) {
+            const err = await fetchResp.json().catch(() => ({ error: 'שגיאה בהורדת הקובץ' }));
+            throw new Error(err.error || 'שגיאה בהורדת הקובץ');
+          }
+        } else {
+          // Fallback: Supabase edge function
+          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+          const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-        const { error: assetError } = await (supabase.from('course_assets') as any).insert({
-          course_id: course.id,
-          file_type: ext,
-          storage_path: storagePath,
-          original_name: downloadedFile.name,
-          size_bytes: downloadedFile.size,
-          status: 'uploaded',
-        });
-        if (assetError) throw assetError;
+          const fetchResp = await fetch(`${supabaseUrl}/functions/v1/fetch-external-file`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${session.access_token}`,
+              'apikey': supabaseKey || '',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ courseId: course.id, url: sourceUrl.trim() }),
+          });
 
-        handleClose();
-        router.push(`/course/${course.id}/builder`);
-        triggerConvert(course.id, session);
-
-      } else if ((sourceType === 'google_drive' || sourceType === 'canva') && sourceUrl.trim()) {
-        // === Google Drive / Canva: דרך Edge Function ===
-        setStatusMsg('מוריד קובץ מהקישור...');
-        toast.info('מוריד קובץ מהקישור...');
-
-        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-        const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-        const fetchResp = await fetch(`${supabaseUrl}/functions/v1/fetch-external-file`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${session.access_token}`,
-            'apikey': supabaseKey || '',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ courseId: course.id, url: sourceUrl.trim() }),
-        });
-
-        if (!fetchResp.ok) {
-          const err = await fetchResp.json().catch(() => ({ error: 'שגיאה בהורדת הקובץ' }));
-          throw new Error(err.error || 'שגיאה בהורדת הקובץ');
+          if (!fetchResp.ok) {
+            const err = await fetchResp.json().catch(() => ({ error: 'שגיאה בהורדת הקובץ' }));
+            throw new Error(err.error || 'שגיאה בהורדת הקובץ');
+          }
         }
 
         handleClose();
@@ -572,7 +550,7 @@ export function CreateCourseDialog() {
                             <li>שנה ל: <strong>כל מי שיש לו קישור יכול להציג</strong></li>
                             <li>לחץ על <strong>העתק קישור</strong> והדבק כאן</li>
                           </ol>
-                          <p className="text-xs text-blue-600 mt-1">⚡ הקובץ יורד ישירות דרך הדפדפן — ללא מגבלות שרת</p>
+                          <p className="text-xs text-blue-600 mt-1">⚡ הקובץ מורד דרך השרת — ללא בעיות CORS</p>
                         </div>
                       )}
 

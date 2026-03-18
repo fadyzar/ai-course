@@ -3,6 +3,7 @@ import {
   handleProcessAsset,
   handleProcessJob,
   handleProcessJobSync,
+  handleFetchUrl,
 } from '../controllers/process.controller.js';
 import { ProcessAssetRequest, ProcessJobRequest } from '../types/index.js';
 
@@ -72,6 +73,23 @@ export async function processRoutes(fastify: FastifyInstance) {
       },
     },
     handleProcessJobSync
+  );
+
+  fastify.post<{ Body: { url: string; courseId: string } }>(
+    '/fetch-url',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          required: ['url', 'courseId'],
+          properties: {
+            url: { type: 'string' },
+            courseId: { type: 'string' },
+          },
+        },
+      },
+    },
+    handleFetchUrl
   );
 
   fastify.get('/health', async () => ({

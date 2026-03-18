@@ -50,7 +50,9 @@ export interface ProcessingResult {
 
 export interface SlideData {
   index: number;
-  text: string;
+  text: string;           // plain text (title + body) — used for isChapterSlide + AI
+  slideTitle: string;     // extracted from title/ctrTitle placeholder
+  bodyHtml: string;       // formatted HTML body (preserves bold/italic/highlight/paragraphs)
   isChapterSlide: boolean;
   externalVideoUrl?: string;
   hasMedia: boolean;

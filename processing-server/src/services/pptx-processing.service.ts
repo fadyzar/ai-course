@@ -16,13 +16,107 @@ const VIMEO_PATTERN = /vimeo\.com\/(\d+)/;
 
 // ─── Text helpers ─────────────────────────────────────────────────────────────
 
-function extractTextFromXml(xml: string): string {
-  const matches = xml.match(/<a:t[^>]*>([^<]*)<\/a:t>/g) || [];
-  return matches
-    .map((m) => m.replace(/<\/?a:t[^>]*>/g, ''))
+/** Build HTML for a single text run, preserving bold/italic/underline/highlight. */
+function buildRunHtml(runXml: string): string {
+  const textMatch = runXml.match(/<a:t(?:[^>]*)>([\s\S]*?)<\/a:t>/);
+  if (!textMatch) return '';
+  const rawText = textMatch[1].replace(/\u0000/g, '').replace(/\x00/g, '');
+  if (!rawText) return '';
+
+  // rPr may be self-closing (<a:rPr ... />) or have children (<a:rPr ...>...</a:rPr>)
+  const rPrXml = runXml.match(/<a:rPr[\s\S]*?(?:<\/a:rPr>|\/>)/)?.[0] || '';
+
+  const isBold      = /\bb="1"/.test(rPrXml)  || /<a:b(?:\s|\/|>)/.test(rPrXml);
+  const isItalic    = /\bi="1"/.test(rPrXml)  || /<a:i(?:\s|\/|>)/.test(rPrXml);
+  const isUnderline = /\bu="sng"/.test(rPrXml);
+
+  // Yellow / any highlight: <a:highlight><a:srgbClr val="RRGGBB"/></a:highlight>
+  const hlMatch = rPrXml.match(
+    /<a:highlight>[\s\S]*?<a:srgbClr\s+val="([0-9A-Fa-f]{6})"/
+  );
+
+  let span = escapeHtml(rawText);
+  if (isBold)      span = `<strong>${span}</strong>`;
+  if (isItalic)    span = `<em>${span}</em>`;
+  if (isUnderline) span = `<u>${span}</u>`;
+  if (hlMatch)     span = `<mark style="background:#${hlMatch[1]};padding:0 2px;border-radius:2px;">${span}</mark>`;
+
+  return span;
+}
+
+/** Build HTML for a single <a:p> paragraph element. Returns '' for empty paragraphs. */
+function buildParagraphHtml(pXml: string, baseStyle = ''): string {
+  const runMatches = [...pXml.matchAll(/<a:r(?:\s[^>]*)?>[\s\S]*?<\/a:r>/g)];
+  if (runMatches.length === 0) return '';
+
+  const html = runMatches.map((m) => buildRunHtml(m[0])).join('');
+  if (!html.trim()) return '';
+
+  const lvlMatch = pXml.match(/\blvl="(\d+)"/);
+  const level    = lvlMatch ? parseInt(lvlMatch[1]) : 0;
+  const indent   = level > 0 ? `padding-right:${level * 16}px;` : '';
+
+  return `<p style="margin:0 0 8px;line-height:1.8;font-size:15px;color:inherit;direction:rtl;${indent}${baseStyle}">${html}</p>`;
+}
+
+interface SlideContent {
+  title: string;    // plain text from title/ctrTitle placeholder
+  bodyHtml: string; // formatted HTML from body placeholder(s)
+  plainText: string;// title + body as plain text (for isChapterSlide + AI)
+}
+
+/**
+ * Parse a slide XML and extract:
+ * - title  : text from the title/ctrTitle shape placeholder
+ * - bodyHtml: formatted HTML (paragraphs, bold, italic, highlight) from body shapes
+ * - plainText: merged plain text for downstream logic
+ */
+function extractSlideContent(xml: string): SlideContent {
+  const titleParts: string[] = [];
+  const bodyParas:  string[] = [];
+
+  // Each <p:sp> is one shape; they don't nest in slide XML
+  for (const spMatch of xml.matchAll(/<p:sp[\s>][\s\S]*?<\/p:sp>/g)) {
+    const spXml = spMatch[0];
+
+    const isTitle = /<p:ph\s[^>]*type="(?:title|ctrTitle)"/.test(spXml);
+
+    const txBodyMatch = spXml.match(/<p:txBody>([\s\S]*?)<\/p:txBody>/);
+    if (!txBodyMatch) continue;
+
+    const pMatches = [...txBodyMatch[1].matchAll(/<a:p(?:\s[^>]*)?>[\s\S]*?<\/a:p>/g)];
+
+    if (isTitle) {
+      // Title: plain text only (no HTML formatting needed — rendered as <h2>)
+      const titleText = pMatches
+        .map((p) =>
+          [...p[0].matchAll(/<a:t(?:[^>]*)>([\s\S]*?)<\/a:t>/g)]
+            .map((t) => t[1].replace(/\u0000/g, '').replace(/\x00/g, ''))
+            .join('')
+        )
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      if (titleText) titleParts.push(titleText);
+    } else {
+      // Body: formatted HTML
+      for (const pMatch of pMatches) {
+        const paraHtml = buildParagraphHtml(pMatch[0]);
+        if (paraHtml) bodyParas.push(paraHtml);
+      }
+    }
+  }
+
+  const title    = sanitizeText(titleParts.join(' '));
+  const bodyHtml = bodyParas.join('');
+  const bodyPlain = bodyParas
+    .map((p) => p.replace(/<[^>]+>/g, ''))
     .join(' ')
     .replace(/\s+/g, ' ')
     .trim();
+  const plainText = sanitizeText([title, bodyPlain].filter(Boolean).join(' '));
+
+  return { title, bodyHtml, plainText };
 }
 
 function extractExternalVideoUrl(xml: string): string | undefined {
@@ -154,25 +248,40 @@ function resolveMediaZipPath(slideFile: string, target: string): string {
 // ─── HTML builder ─────────────────────────────────────────────────────────────
 
 function buildSlideHtml(slide: SlideData, totalSlides: number): string {
-  const displayText = escapeHtml(sanitizeText(slide.aiSummary || slide.text));
-
   const S = {
-    wrap: 'direction:rtl;font-family:"Segoe UI",Arial,sans-serif;padding:8px 0;',
-    header: 'display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #e2e8f0;padding-bottom:14px;margin-bottom:20px;',
-    title: 'font-size:22px;font-weight:700;color:#0f172a;margin:0;',
-    counter: 'font-size:13px;color:#94a3b8;',
-    textBox: 'background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:24px;margin-bottom:16px;',
-    textContent: 'font-size:16px;line-height:1.8;color:#1e293b;white-space:pre-wrap;margin:0;',
-    videoWrap: 'position:relative;width:100%;padding-bottom:56.25%;height:0;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.12);margin-bottom:16px;',
-    iframe: 'position:absolute;top:0;left:0;width:100%;height:100%;border:0;',
-    imgWrap: 'border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;margin-bottom:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);',
-    img: 'width:100%;height:auto;max-height:420px;object-fit:contain;background:#f8fafc;display:block;',
-    chapterWrap: 'display:flex;align-items:center;justify-content:center;min-height:50vh;',
+    wrap:         'direction:rtl;font-family:"Segoe UI",Arial,sans-serif;padding:8px 0;',
+    header:       'display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid #e2e8f0;padding-bottom:14px;margin-bottom:20px;',
+    slideCounter: 'font-size:13px;color:#94a3b8;white-space:nowrap;',
+    slideTitle:   'font-size:22px;font-weight:700;color:#0f172a;margin:0;',
+    bodyBox:      'background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:24px;margin-bottom:16px;color:#1e293b;',
+    videoWrap:    'position:relative;width:100%;padding-bottom:56.25%;height:0;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.12);margin-bottom:16px;',
+    iframe:       'position:absolute;top:0;left:0;width:100%;height:100%;border:0;',
+    imgWrap:      'border-radius:12px;overflow:hidden;border:1px solid #e2e8f0;margin-bottom:12px;box-shadow:0 2px 8px rgba(0,0,0,0.06);',
+    img:          'width:100%;height:auto;max-height:420px;object-fit:contain;background:#f8fafc;display:block;',
+    chapterWrap:  'display:flex;align-items:center;justify-content:center;min-height:50vh;',
     chapterInner: 'text-align:center;',
     chapterBadge: 'display:inline-flex;align-items:center;justify-content:center;width:64px;height:64px;background:#dbeafe;border-radius:16px;margin-bottom:16px;',
-    chapterNum: 'font-size:24px;font-weight:700;color:#2563eb;',
+    chapterNum:   'font-size:24px;font-weight:700;color:#2563eb;',
     chapterTitle: 'font-size:36px;font-weight:800;color:#0f172a;margin:0;',
   };
+
+  // Use extracted title if available, fall back to "שקופית N"
+  const titleHtml = slide.slideTitle
+    ? `<h2 style="${S.slideTitle}">${escapeHtml(slide.slideTitle)}</h2>`
+    : `<h2 style="${S.slideTitle}">שקופית ${slide.index}</h2>`;
+
+  // Body: prefer structured bodyHtml (preserves formatting); fall back to AI summary or plain text
+  const bodyContent = slide.bodyHtml ||
+    (slide.aiSummary
+      ? `<p style="margin:0 0 8px;line-height:1.8;font-size:15px;color:inherit;">${escapeHtml(sanitizeText(slide.aiSummary))}</p>`
+      : (slide.text
+          ? `<p style="margin:0 0 8px;line-height:1.8;font-size:15px;color:inherit;">${escapeHtml(sanitizeText(slide.text))}</p>`
+          : ''));
+
+  const headerHtml = `<div style="${S.header}">
+    ${titleHtml}
+    <span style="${S.slideCounter}">${slide.index} / ${totalSlides}</span>
+  </div>`;
 
   // ── YouTube / Vimeo ──────────────────────────────────────────────────────────
   if (slide.externalVideoUrl) {
@@ -185,35 +294,27 @@ function buildSlideHtml(slide: SlideData, totalSlides: number): string {
       : slide.externalVideoUrl;
 
     return `<div style="${S.wrap}">
-  <div style="${S.header}">
-    <h2 style="${S.title}">שקופית ${slide.index}</h2>
-    <span style="${S.counter}">${slide.index} / ${totalSlides}</span>
-  </div>
+  ${headerHtml}
   <div style="${S.videoWrap}">
     <iframe src="${embedUrl}" style="${S.iframe}"
       allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
       allowfullscreen></iframe>
   </div>
-  ${displayText ? `<div style="${S.textBox}"><p style="${S.textContent}">${displayText}</p></div>` : ''}
+  ${bodyContent ? `<div style="${S.bodyBox}">${bodyContent}</div>` : ''}
 </div>`;
   }
 
   // ── Embedded video from storage (mp4/mov etc.) ──────────────────────────────
-  // videoStoragePath is a relative bucket path — the viewer (VideoLesson) will
-  // create a signed URL. We still render a placeholder in the HTML.
   if (slide.videoStoragePath && !slide.externalVideoUrl) {
     return `<div style="${S.wrap}">
-  <div style="${S.header}">
-    <h2 style="${S.title}">שקופית ${slide.index}</h2>
-    <span style="${S.counter}">${slide.index} / ${totalSlides}</span>
-  </div>
+  ${headerHtml}
   <div style="background:#0f172a;border-radius:12px;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;margin-bottom:16px;">
     <div style="text-align:center;color:#94a3b8;">
       <div style="font-size:48px;margin-bottom:8px;">▶</div>
       <p style="font-size:14px;">סרטון מוטמע</p>
     </div>
   </div>
-  ${displayText ? `<div style="${S.textBox}"><p style="${S.textContent}">${displayText}</p></div>` : ''}
+  ${bodyContent ? `<div style="${S.bodyBox}">${bodyContent}</div>` : ''}
 </div>`;
   }
 
@@ -225,7 +326,7 @@ function buildSlideHtml(slide: SlideData, totalSlides: number): string {
       <div style="${S.chapterBadge}">
         <span style="${S.chapterNum}">${slide.index}</span>
       </div>
-      <h1 style="${S.chapterTitle}">${escapeHtml(sanitizeText(slide.text))}</h1>
+      <h1 style="${S.chapterTitle}">${escapeHtml(sanitizeText(slide.slideTitle || slide.text))}</h1>
     </div>
   </div>
 </div>`;
@@ -239,11 +340,8 @@ function buildSlideHtml(slide: SlideData, totalSlides: number): string {
     .join('');
 
   return `<div style="${S.wrap}">
-  <div style="${S.header}">
-    <h2 style="${S.title}">שקופית ${slide.index}</h2>
-    <span style="${S.counter}">${slide.index} / ${totalSlides}</span>
-  </div>
-  ${displayText ? `<div style="${S.textBox}"><p style="${S.textContent}">${displayText}</p></div>` : ''}
+  ${headerHtml}
+  ${bodyContent ? `<div style="${S.bodyBox}">${bodyContent}</div>` : ''}
   ${imageHtml}
 </div>`;
 }
@@ -334,7 +432,8 @@ export async function processPptx(
     }
     const xml = xmlBuf.toString('utf8');
 
-    const text = sanitizeText(extractTextFromXml(xml));
+    const { title: slideTitle, bodyHtml, plainText } = extractSlideContent(xml);
+    const text = plainText; // kept for backward-compat (isChapterSlide, AI enrichment)
 
     // Parse rels XML first — YouTube/Vimeo URLs are stored in the rels file
     // (as External Target on the /video relationship), NOT in the slide body XML.
@@ -355,6 +454,8 @@ export async function processPptx(
     slides.push({
       index: i + 1,
       text,
+      slideTitle,
+      bodyHtml,
       isChapterSlide: isChapterSlide(text, hasMedia),
       externalVideoUrl,
       hasMedia,
@@ -424,7 +525,7 @@ export async function processPptx(
         sectionIndex,
         orderIndex: globalPageIndex,
         pageType: (slide.externalVideoUrl || slide.videoStoragePath) ? 'video' : 'pptx_slide',
-        title: sanitizeText(slide.text).substring(0, 80) || `שקופית ${slide.index}`,
+        title: sanitizeText(slide.slideTitle || slide.text).substring(0, 80) || `שקופית ${slide.index}`,
         htmlContent: buildSlideHtml(slide, totalSlides),
         assetId,
         videoStoragePath: slide.videoStoragePath,
