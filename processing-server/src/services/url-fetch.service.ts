@@ -241,6 +241,133 @@ async function tryConsumerOneDriveDirectDownload(url: string): Promise<Response 
   return null;
 }
 
+/**
+ * Strategy: SPO viewer URL + &download=1 → follow FIRST redirect manually → inject e= token.
+ *
+ * When &download=1 is added to a OneDrive SPO viewer URL, the server issues a 302
+ * to the actual file path (e.g. /personal/CID/Documents/file.pptx?ga=1).
+ * That file path + the original e= sharing token often allows direct download.
+ * Also tries maintaining cookies across the redirect chain.
+ */
+async function tryManualRedirectWithToken(viewerUrl: string): Promise<Response | null> {
+  // Extract the e= sharing token from the viewer URL
+  let token = '';
+  try {
+    token = new URL(viewerUrl).searchParams.get('e') || '';
+  } catch { /* ignore */ }
+
+  const downloadTriggerUrl = viewerUrl.includes('?')
+    ? `${viewerUrl}&download=1`
+    : `${viewerUrl}?download=1`;
+
+  // ── Walk the redirect chain manually, carrying cookies ──
+  const cookies: Record<string, string> = {};
+  let currentUrl = downloadTriggerUrl;
+  let filePath = '';
+
+  for (let hop = 0; hop < 8; hop++) {
+    let resp: Response;
+    try {
+      resp = await fetch(currentUrl, {
+        method: 'GET',
+        redirect: 'manual',
+        headers: {
+          'User-Agent': BROWSER_UA,
+          Accept: 'text/html,application/xhtml+xml,*/*',
+          ...(Object.keys(cookies).length > 0
+            ? { Cookie: Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ') }
+            : {}),
+        },
+      });
+    } catch { break; }
+
+    // Harvest cookies from this response
+    const setCookies = (resp.headers as any).getSetCookie?.() as string[] | undefined ?? [];
+    for (const sc of setCookies) {
+      const [kv] = sc.split(';');
+      const eq = kv.indexOf('=');
+      if (eq > 0) cookies[kv.slice(0, eq).trim()] = kv.slice(eq + 1).trim();
+    }
+
+    if (resp.status >= 200 && resp.status < 300) {
+      const ct = resp.headers.get('content-type') || '';
+      if (!ct.includes('text/html')) {
+        logger.info({ hop, ct }, '[URL-FETCH] Manual redirect chain: got file');
+        return resp;
+      }
+      await resp.body?.cancel();
+      break; // HTML dead end
+    }
+
+    if (resp.status < 300 || resp.status >= 400) { await resp.body?.cancel(); break; }
+
+    // It's a redirect
+    let location = resp.headers.get('location') || '';
+    await resp.body?.cancel();
+    if (!location) break;
+    if (location.startsWith('/')) {
+      const base = new URL(currentUrl);
+      location = `${base.protocol}//${base.host}${location}`;
+    }
+    logger.info({ hop, location: location.slice(0, 120) }, '[URL-FETCH] Manual redirect hop');
+
+    // Stop at login pages — but first record the last non-login file path
+    if (location.includes('login.live.com') || location.includes('Authenticate.aspx')) {
+      // filePath was set in a prior hop — try it with token injected
+      break;
+    }
+
+    // If this looks like the real file path, record it
+    if (location.includes('/personal/') && !location.includes('/_layouts/') && !filePath) {
+      filePath = location;
+    }
+
+    currentUrl = location;
+  }
+
+  // ── Try the discovered file path with the e= token injected ──
+  if (filePath && token) {
+    // Strip ga=1 noise, inject e= token
+    const clean = filePath.replace(/[?&]ga=\d+/, '');
+    const withToken = clean.includes('?')
+      ? `${clean}&e=${encodeURIComponent(token)}`
+      : `${clean}?e=${encodeURIComponent(token)}`;
+
+    logger.info({ withToken }, '[URL-FETCH] Trying file path + e= token');
+    try {
+      const fileResp = await fetch(withToken, {
+        redirect: 'follow',
+        headers: {
+          'User-Agent': BROWSER_UA,
+          ...(Object.keys(cookies).length > 0
+            ? { Cookie: Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ') }
+            : {}),
+        },
+      });
+      const ct = fileResp.headers.get('content-type') || '';
+      logger.info({ status: fileResp.status, ct }, '[URL-FETCH] File path + token response');
+      if (fileResp.ok && !ct.includes('text/html')) return fileResp;
+      await fileResp.body?.cancel();
+
+      // Also try without the token — maybe cookies alone are enough
+      if (Object.keys(cookies).length > 0) {
+        const noToken = await fetch(clean, {
+          redirect: 'follow',
+          headers: { 'User-Agent': BROWSER_UA, Cookie: Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ') },
+        });
+        const ct2 = noToken.headers.get('content-type') || '';
+        logger.info({ status: noToken.status, ct: ct2 }, '[URL-FETCH] File path + cookies-only response');
+        if (noToken.ok && !ct2.includes('text/html')) return noToken;
+        await noToken.body?.cancel();
+      }
+    } catch (e: any) {
+      logger.debug({ err: e.message }, '[URL-FETCH] File path + token fetch failed');
+    }
+  }
+
+  return null;
+}
+
 /** Strategy 2: Follow all redirects from the share/short URL and download the final destination */
 async function tryFollowRedirects(url: string): Promise<Response | null> {
   try {
@@ -292,9 +419,13 @@ export async function fetchUrlToTempFile(url: string): Promise<FetchResult> {
     url.includes('sharepoint.com');
 
   if (isOneDrive) {
+    // Strategy: SPO viewer URL — follow &download=1 redirect chain manually, inject e= token
+    // This is the most effective approach for consumer OneDrive SPO-migrated files
+    response = await tryManualRedirectWithToken(url);
+
     // Strategy 0: Consumer OneDrive — follow redirects, extract resid+authkey, build direct download URL
     // This handles 1drv.ms short links and onedrive.live.com share links
-    response = await tryConsumerOneDriveDirectDownload(url);
+    if (!response) response = await tryConsumerOneDriveDirectDownload(url);
 
     // For consumer OneDrive — the ?redeem= param contains the real short URL
     if (!response) {
