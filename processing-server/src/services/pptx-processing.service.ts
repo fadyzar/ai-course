@@ -335,15 +335,18 @@ export async function processPptx(
     const xml = xmlBuf.toString('utf8');
 
     const text = sanitizeText(extractTextFromXml(xml));
-    const externalVideoUrl = extractExternalVideoUrl(xml);
 
-    // Parse rels XML
+    // Parse rels XML first — YouTube/Vimeo URLs are stored in the rels file
+    // (as External Target on the /video relationship), NOT in the slide body XML.
     const relsKey = slideFile.replace(
       /ppt\/slides\/(slide\d+\.xml)/,
       'ppt/slides/_rels/$1.rels'
     );
     const relsXml = xmlEntries.get(relsKey)?.toString('utf8') || '';
     const relationships = parseRelationships(relsXml);
+
+    // Check slide body first, fall back to rels file (covers all PowerPoint versions)
+    const externalVideoUrl = extractExternalVideoUrl(xml) ?? extractExternalVideoUrl(relsXml);
 
     const hasMedia =
       relationships.some((r) => r.type === 'image' || r.type === 'video') ||
