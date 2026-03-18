@@ -542,10 +542,6 @@ export async function storeFetchedFile(
 
   logger.info({ storagePath, sizeBytes }, '[URL-FETCH] Uploading to storage');
 
-  // Read the temp file as a Buffer and upload
-  const { readFile } = await import('fs/promises');
-  const buf = await readFile(tmpPath);
-
   const mimeMap: Record<string, string> = {
     pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     pdf: 'application/pdf',
@@ -553,11 +549,33 @@ export async function storeFetchedFile(
   };
   const uploadContentType = mimeMap[ext] || contentType;
 
-  const { error: uploadError } = await supabase.storage
-    .from('course-assets')
-    .upload(storagePath, buf, { contentType: uploadContentType, upsert: true });
+  // Stream the file directly to Supabase — avoids loading large files into memory (OOM prevention)
+  const supabaseUrl = process.env.SUPABASE_URL!;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  const { createReadStream } = await import('fs');
+  const { Readable } = await import('stream');
 
-  if (uploadError) throw new Error('שגיאה בשמירת הקובץ: ' + uploadError.message);
+  const nodeStream = createReadStream(tmpPath);
+  const webStream = Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
+
+  const uploadUrl = `${supabaseUrl}/storage/v1/object/${encodeURIComponent('course-assets')}/${storagePath}`;
+  const uploadResp = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serviceKey}`,
+      apikey: serviceKey,
+      'Content-Type': uploadContentType,
+      'x-upsert': 'true',
+    },
+    body: webStream,
+    // @ts-ignore — Node.js requires this for streaming request bodies
+    duplex: 'half',
+  });
+
+  if (!uploadResp.ok) {
+    const errBody = await uploadResp.text().catch(() => '');
+    throw new Error(`שגיאה בשמירת הקובץ: ${uploadResp.status} ${errBody}`);
+  }
 
   const { data: asset, error: assetError } = await supabase
     .from('course_assets')
