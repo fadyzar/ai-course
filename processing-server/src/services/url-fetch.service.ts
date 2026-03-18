@@ -91,6 +91,48 @@ async function tryGraphApi(shareUrl: string): Promise<Response | null> {
   return null;
 }
 
+/**
+ * Strategy 1b: Consumer OneDrive (onedrive.live.com / 1drv.ms)
+ * Follow redirects to get resid+authkey from the final URL, then build a direct download URL.
+ * This is the most reliable method for personal OneDrive share links.
+ */
+async function tryConsumerOneDriveDirectDownload(url: string): Promise<Response | null> {
+  try {
+    // Follow redirects to get the resolved URL (may be onedrive.live.com/view.aspx?resid=...&authkey=...)
+    const headResp = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      headers: { 'User-Agent': BROWSER_UA },
+    });
+    const finalUrl = headResp.url || url;
+
+    // Try building a direct download URL from the resid+authkey in the final (or original) URL
+    for (const candidate of [finalUrl, url]) {
+      try {
+        const parsed = new URL(candidate);
+        if (parsed.hostname === 'onedrive.live.com') {
+          const resid = parsed.searchParams.get('resid');
+          const authkey = parsed.searchParams.get('authkey');
+          if (resid) {
+            const dlUrl = `https://onedrive.live.com/download?resid=${encodeURIComponent(resid)}&authkey=${encodeURIComponent(authkey || '')}`;
+            logger.info({ dlUrl }, '[URL-FETCH] Trying consumer OneDrive direct download URL');
+            const dlResp = await fetch(dlUrl, {
+              redirect: 'follow',
+              headers: { 'User-Agent': BROWSER_UA },
+            });
+            if (dlResp.ok && !(dlResp.headers.get('content-type') || '').includes('text/html')) {
+              return dlResp;
+            }
+          }
+        }
+      } catch { /* ignore */ }
+    }
+  } catch (e: any) {
+    logger.debug({ err: e.message }, '[URL-FETCH] Consumer OneDrive direct download failed');
+  }
+  return null;
+}
+
 /** Strategy 2: Follow all redirects from the share/short URL and download the final destination */
 async function tryFollowRedirects(url: string): Promise<Response | null> {
   try {
@@ -142,21 +184,29 @@ export async function fetchUrlToTempFile(url: string): Promise<FetchResult> {
     url.includes('sharepoint.com');
 
   if (isOneDrive) {
-    // For consumer OneDrive — the ?redeem= param contains the real short URL
-    const redeemUrl = extractRedeemUrl(url);
-    if (redeemUrl) {
-      logger.info({ redeemUrl }, '[URL-FETCH] Decoded redeem URL, resolving...');
-      const resolved = await resolveRedirects(redeemUrl);
-      logger.info({ resolved }, '[URL-FETCH] Resolved to');
+    // Strategy 0: Consumer OneDrive — follow redirects, extract resid+authkey, build direct download URL
+    // This handles 1drv.ms short links and onedrive.live.com share links
+    response = await tryConsumerOneDriveDirectDownload(url);
 
-      response = await tryGraphApi(resolved);
-      if (!response) response = await tryGraphApi(redeemUrl);
-      if (!response) response = await tryFollowRedirects(resolved);
-      if (!response) response = await tryFollowRedirects(redeemUrl);
-      if (!response) response = await tryDownload1(resolved);
+    // For consumer OneDrive — the ?redeem= param contains the real short URL
+    if (!response) {
+      const redeemUrl = extractRedeemUrl(url);
+      if (redeemUrl) {
+        logger.info({ redeemUrl }, '[URL-FETCH] Decoded redeem URL, resolving...');
+        const resolved = await resolveRedirects(redeemUrl);
+        logger.info({ resolved }, '[URL-FETCH] Resolved to');
+
+        if (!response) response = await tryConsumerOneDriveDirectDownload(redeemUrl);
+        if (!response) response = await tryConsumerOneDriveDirectDownload(resolved);
+        if (!response) response = await tryGraphApi(resolved);
+        if (!response) response = await tryGraphApi(redeemUrl);
+        if (!response) response = await tryFollowRedirects(resolved);
+        if (!response) response = await tryFollowRedirects(redeemUrl);
+        if (!response) response = await tryDownload1(resolved);
+      }
     }
 
-    // Try with the original URL
+    // Try with the original URL via Graph API and fallbacks
     if (!response) response = await tryGraphApi(url);
     if (!response) response = await tryFollowRedirects(url);
     if (!response) response = await tryDownload1(url);
@@ -164,7 +214,8 @@ export async function fetchUrlToTempFile(url: string): Promise<FetchResult> {
     // Short URL (1drv.ms) — resolve first then retry
     if (!response && url.includes('1drv.ms')) {
       const resolved = await resolveRedirects(url);
-      response = await tryFollowRedirects(resolved);
+      response = await tryConsumerOneDriveDirectDownload(resolved);
+      if (!response) response = await tryFollowRedirects(resolved);
       if (!response) response = await tryDownload1(resolved);
     }
   } else {
