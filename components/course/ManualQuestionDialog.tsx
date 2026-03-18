@@ -90,6 +90,8 @@ const TEMPLATES: Template[] = [
 
 interface ManualQuestionDialogProps {
   courseId: string;
+  pageId?: string;
+  pageName?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onQuestionAdded: () => void;
@@ -124,6 +126,8 @@ const emptyForm = (): FormState => ({
 
 export function ManualQuestionDialog({
   courseId,
+  pageId,
+  pageName,
   open,
   onOpenChange,
   onQuestionAdded,
@@ -156,6 +160,8 @@ export function ManualQuestionDialog({
 
     let questionData: any = null;
 
+    const pageIdField = pageId ? { page_id: pageId } : {};
+
     if (selectedTemplate.id === 'slide_title') {
       if (!form.prompt.trim()) {
         toast.error('נא להזין כותרת יחידה');
@@ -163,6 +169,7 @@ export function ManualQuestionDialog({
       }
       questionData = {
         course_id: courseId,
+        ...pageIdField,
         type: 'single_choice' as const,
         prompt: `[שקופית כותרת] ${form.prompt}`,
         options: [],
@@ -183,6 +190,7 @@ export function ManualQuestionDialog({
       }
       questionData = {
         course_id: courseId,
+        ...pageIdField,
         type: 'single_choice' as const,
         prompt: form.prompt,
         options: filledOptions,
@@ -203,6 +211,7 @@ export function ManualQuestionDialog({
       }
       questionData = {
         course_id: courseId,
+        ...pageIdField,
         type: 'multiple_choice' as const,
         prompt: form.prompt,
         options: filledOptions,
@@ -221,6 +230,7 @@ export function ManualQuestionDialog({
       const targets = filledPairs.map((p) => p.target);
       questionData = {
         course_id: courseId,
+        ...pageIdField,
         type: 'single_choice' as const,
         prompt: form.prompt,
         options: options.map((item, i) => `${item} → ${targets[i]}`),
@@ -238,6 +248,7 @@ export function ManualQuestionDialog({
       }
       questionData = {
         course_id: courseId,
+        ...pageIdField,
         type: 'single_choice' as const,
         prompt: form.prompt,
         options: filledItems,
@@ -254,6 +265,7 @@ export function ManualQuestionDialog({
       }
       questionData = {
         course_id: courseId,
+        ...pageIdField,
         type: 'single_choice' as const,
         prompt: form.prompt,
         options: [],
@@ -330,6 +342,11 @@ export function ManualQuestionDialog({
           <DialogTitle className="text-xl font-bold text-slate-900">
             {step === 'select_template' ? 'בחר תבנית שאלה' : selectedTemplate?.title}
           </DialogTitle>
+          {pageId && pageName && (
+            <p className="text-sm text-blue-600 font-medium mt-1">
+              מוסיף שאלה לשיעור: {pageName}
+            </p>
+          )}
         </DialogHeader>
 
         {step === 'select_template' && (
