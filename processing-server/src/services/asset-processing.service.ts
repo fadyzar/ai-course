@@ -141,7 +141,7 @@ export async function processAsset(
     try {
       await downloadAssetToFile(supabase, assetRecord.storage_path, tmpPath);
       await dbProgress(`הורדה הושלמה, מחלץ שקופיות...`, 15);
-      result = await processPptx(tmpPath, assetId, assetRecord.original_name, supabase, async (msg) => {
+      result = await processPptx(tmpPath, assetId, assetRecord.original_name, 'html', supabase, async (msg) => {
         logger.info({ assetId, msg }, '[PPTX-PROGRESS]');
         if (jobId) {
           await supabase.from('processing_logs').insert({ job_id: jobId, level: 'info', message: msg });
@@ -291,7 +291,7 @@ export async function processJobById(
           const tmpPath = `/tmp/pptx_${asset.id}_${Date.now()}.pptx`;
           try {
             await downloadAssetToFile(supabase, assetRecord.storage_path, tmpPath);
-            assetResult = await processPptx(tmpPath, asset.id, assetRecord.original_name, supabase, (msg) => logger.info({ msg }, '[PROGRESS]'));
+            assetResult = await processPptx(tmpPath, asset.id, assetRecord.original_name, 'html', supabase, (msg) => logger.info({ msg }, '[PROGRESS]'));
           } finally {
             await unlink(tmpPath).catch(() => {});
           }

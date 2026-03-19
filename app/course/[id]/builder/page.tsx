@@ -14,13 +14,15 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { ArrowLeft, Info, Download, Loader as Loader2, CirclePlus as PlusCircle } from 'lucide-react';
+import { ArrowLeft, Info, Download, Loader as Loader2, CirclePlus as PlusCircle, Pencil, Check, X } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 import { ManualQuestionDialog } from '@/components/course/ManualQuestionDialog';
 
 type Course = Database['public']['Tables']['courses']['Row'];
 type Asset = Database['public']['Tables']['course_assets']['Row'];
+type Section = Database['public']['Tables']['course_sections']['Row'];
+type Page = Database['public']['Tables']['course_pages']['Row'];
 
 export default function CourseBuilderPage() {
   const params = useParams();
@@ -38,10 +40,20 @@ export default function CourseBuilderPage() {
   const [autoConvertTriggered, setAutoConvertTriggered] = useState(false);
   const [manualQuestionOpen, setManualQuestionOpen] = useState(false);
 
+  // Chapter management state
+  const [sections, setSections] = useState<Section[]>([]);
+  const [pages, setPages] = useState<Page[]>([]);
+  const [editingSectionId, setEditingSectionId] = useState<string | null>(null);
+  const [editingSectionTitle, setEditingSectionTitle] = useState('');
+  const [addingSectionTitle, setAddingSectionTitle] = useState('');
+  const [isAddingSection, setIsAddingSection] = useState(false);
+  const [savingPageId, setSavingPageId] = useState<string | null>(null);
+
   useEffect(() => {
     if (courseId) {
       loadCourse();
       loadAssets();
+      loadChapterData();
     }
   }, [courseId]);
 
@@ -124,6 +136,19 @@ export default function CourseBuilderPage() {
       setAssets(data || []);
     } catch (error: any) {
       toast.error('שגיאה בטעינת קבצים');
+    }
+  };
+
+  const loadChapterData = async () => {
+    try {
+      const [sr, pr] = await Promise.all([
+        supabase.from('course_sections').select('*').eq('course_id', courseId).order('order_index'),
+        supabase.from('course_pages').select('*').eq('course_id', courseId).order('order_index'),
+      ]);
+      setSections((sr.data || []) as Section[]);
+      setPages((pr.data || []) as Page[]);
+    } catch (e) {
+      console.error(e);
     }
   };
 
@@ -361,6 +386,58 @@ export default function CourseBuilderPage() {
     }
   };
 
+  /* ── Chapter management helpers ── */
+
+  const handleRenameSectionSave = async (sectionId: string) => {
+    const trimmed = editingSectionTitle.trim();
+    if (!trimmed) { setEditingSectionId(null); return; }
+    try {
+      await (supabase.from('course_sections') as any)
+        .update({ title: trimmed })
+        .eq('id', sectionId);
+      setSections(prev => prev.map(s => s.id === sectionId ? { ...s, title: trimmed } : s));
+      toast.success('שם הפרק עודכן');
+    } catch (e: any) {
+      toast.error('שגיאה בעדכון שם הפרק');
+    }
+    setEditingSectionId(null);
+  };
+
+  const handleAddSection = async () => {
+    const trimmed = addingSectionTitle.trim();
+    if (!trimmed) return;
+    const nextOrder = sections.length > 0
+      ? Math.max(...sections.map(s => s.order_index)) + 1
+      : 0;
+    try {
+      const { data, error } = await (supabase.from('course_sections') as any)
+        .insert({ course_id: courseId, title: trimmed, order_index: nextOrder })
+        .select()
+        .single();
+      if (error) throw error;
+      setSections(prev => [...prev, data as Section]);
+      setAddingSectionTitle('');
+      setIsAddingSection(false);
+      toast.success('פרק חדש נוצר');
+    } catch (e: any) {
+      toast.error('שגיאה ביצירת פרק: ' + e.message);
+    }
+  };
+
+  const handleReassignPage = async (pageId: string, newSectionId: string) => {
+    setSavingPageId(pageId);
+    try {
+      await (supabase.from('course_pages') as any)
+        .update({ section_id: newSectionId })
+        .eq('id', pageId);
+      setPages(prev => prev.map(p => p.id === pageId ? { ...p, section_id: newSectionId } : p));
+    } catch (e: any) {
+      toast.error('שגיאה בהעברת עמוד: ' + e.message);
+    } finally {
+      setSavingPageId(null);
+    }
+  };
+
   if (loading) {
     return (
       <DashboardLayout>
@@ -440,12 +517,15 @@ export default function CourseBuilderPage() {
 
           <div className="lg:col-span-3 space-y-6 order-1 lg:order-2">
             <Tabs defaultValue="upload" className="w-full">
-              <TabsList className="grid w-full grid-cols-2">
+              <TabsList className="grid w-full grid-cols-3">
                 <TabsTrigger value="upload">
                   העלאת קבצים {assets.length > 0 && `(${assets.length})`}
                 </TabsTrigger>
                 <TabsTrigger value="files">
                   ניהול קבצים
+                </TabsTrigger>
+                <TabsTrigger value="chapters">
+                  ניהול פרקים
                 </TabsTrigger>
               </TabsList>
               <TabsContent value="upload" className="space-y-4">
@@ -471,6 +551,182 @@ export default function CourseBuilderPage() {
                     <p className="text-slate-400 text-sm mt-2">העלה קבצים בלשונית "העלאת קבצים"</p>
                   </Card>
                 )}
+              </TabsContent>
+              <TabsContent value="chapters">
+                <div className="space-y-4" dir="rtl">
+                  {/* Add new section */}
+                  <div className="flex items-center gap-2">
+                    {isAddingSection ? (
+                      <>
+                        <input
+                          autoFocus
+                          value={addingSectionTitle}
+                          onChange={e => setAddingSectionTitle(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') handleAddSection();
+                            if (e.key === 'Escape') { setIsAddingSection(false); setAddingSectionTitle(''); }
+                          }}
+                          placeholder="שם הפרק החדש..."
+                          className="flex-1 border border-slate-300 rounded-md px-3 py-1.5 text-sm outline-none focus:border-blue-500"
+                          style={{ direction: 'rtl' }}
+                        />
+                        <button
+                          onClick={handleAddSection}
+                          className="p-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700"
+                          title="שמור"
+                        >
+                          <Check className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => { setIsAddingSection(false); setAddingSectionTitle(''); }}
+                          className="p-1.5 rounded-md border border-slate-300 text-slate-500 hover:bg-slate-50"
+                          title="ביטול"
+                        >
+                          <X className="h-4 w-4" />
+                        </button>
+                      </>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setIsAddingSection(true)}
+                        className="gap-2"
+                      >
+                        <PlusCircle className="h-4 w-4" />
+                        הוסף פרק חדש
+                      </Button>
+                    )}
+                  </div>
+
+                  {sections.length === 0 && pages.length === 0 && (
+                    <Card className="p-8 text-center">
+                      <p className="text-slate-500">אין פרקים עמודים עדיין. עבד קובץ תחילה.</p>
+                    </Card>
+                  )}
+
+                  {/* Sections list with pages */}
+                  {sections.map(section => {
+                    const sectionPages = pages.filter(p => p.section_id === section.id);
+                    const isEditingThis = editingSectionId === section.id;
+
+                    return (
+                      <Card key={section.id} className="p-4">
+                        {/* Section header with inline rename */}
+                        <div className="flex items-center gap-2 mb-3">
+                          {isEditingThis ? (
+                            <>
+                              <input
+                                autoFocus
+                                value={editingSectionTitle}
+                                onChange={e => setEditingSectionTitle(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter') handleRenameSectionSave(section.id);
+                                  if (e.key === 'Escape') setEditingSectionId(null);
+                                }}
+                                className="flex-1 border border-blue-400 rounded px-2 py-1 text-sm font-semibold outline-none"
+                                style={{ direction: 'rtl' }}
+                              />
+                              <button
+                                onClick={() => handleRenameSectionSave(section.id)}
+                                className="p-1 rounded bg-blue-600 text-white hover:bg-blue-700"
+                                title="שמור"
+                              >
+                                <Check className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                onClick={() => setEditingSectionId(null)}
+                                className="p-1 rounded border border-slate-300 text-slate-500 hover:bg-slate-50"
+                                title="ביטול"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <h3 className="font-semibold text-slate-800 flex-1 text-right">
+                                {section.title}
+                              </h3>
+                              <span className="text-xs text-slate-400 ml-2">{sectionPages.length} עמודים</span>
+                              <button
+                                onClick={() => {
+                                  setEditingSectionId(section.id);
+                                  setEditingSectionTitle(section.title);
+                                }}
+                                className="p-1 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+                                title="שנה שם"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                            </>
+                          )}
+                        </div>
+
+                        {/* Pages in this section */}
+                        {sectionPages.length === 0 && (
+                          <p className="text-xs text-slate-400 text-right py-2">אין עמודים בפרק זה</p>
+                        )}
+                        <div className="space-y-1">
+                          {sectionPages.map(page => (
+                            <div
+                              key={page.id}
+                              className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-slate-50"
+                            >
+                              <span className="flex-1 text-sm text-slate-700 text-right truncate">
+                                {page.title || `עמוד ${page.order_index + 1}`}
+                              </span>
+                              <select
+                                value={page.section_id || ''}
+                                disabled={savingPageId === page.id}
+                                onChange={e => handleReassignPage(page.id, e.target.value)}
+                                className="text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-600 bg-white outline-none focus:border-blue-400 disabled:opacity-50"
+                                style={{ direction: 'rtl' }}
+                              >
+                                {sections.map(s => (
+                                  <option key={s.id} value={s.id}>{s.title}</option>
+                                ))}
+                              </select>
+                            </div>
+                          ))}
+                        </div>
+                      </Card>
+                    );
+                  })}
+
+                  {/* Unassigned pages */}
+                  {(() => {
+                    const unassigned = pages.filter(p => !p.section_id || !sections.find(s => s.id === p.section_id));
+                    if (unassigned.length === 0) return null;
+                    return (
+                      <Card className="p-4 border-dashed border-slate-300">
+                        <h3 className="font-semibold text-slate-500 text-right mb-3">עמודים ללא פרק</h3>
+                        <div className="space-y-1">
+                          {unassigned.map(page => (
+                            <div
+                              key={page.id}
+                              className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-slate-50"
+                            >
+                              <span className="flex-1 text-sm text-slate-700 text-right truncate">
+                                {page.title || `עמוד ${page.order_index + 1}`}
+                              </span>
+                              <select
+                                value=""
+                                disabled={savingPageId === page.id}
+                                onChange={e => { if (e.target.value) handleReassignPage(page.id, e.target.value); }}
+                                className="text-xs border border-slate-200 rounded px-1.5 py-1 text-slate-600 bg-white outline-none focus:border-blue-400 disabled:opacity-50"
+                                style={{ direction: 'rtl' }}
+                              >
+                                <option value="">-- שייך לפרק --</option>
+                                {sections.map(s => (
+                                  <option key={s.id} value={s.id}>{s.title}</option>
+                                ))}
+                              </select>
+                            </div>
+                          ))}
+                        </div>
+                      </Card>
+                    );
+                  })()}
+                </div>
               </TabsContent>
             </Tabs>
 

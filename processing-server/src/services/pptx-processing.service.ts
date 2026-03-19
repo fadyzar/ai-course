@@ -1,4 +1,7 @@
 import * as unzipper from 'unzipper';
+import { execFile } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
 import { SupabaseClient } from '@supabase/supabase-js';
 import {
   ProcessingResult,
@@ -44,19 +47,57 @@ function buildRunHtml(runXml: string): string {
   return span;
 }
 
-/** Build HTML for a single <a:p> paragraph element. Returns '' for empty paragraphs. */
-function buildParagraphHtml(pXml: string, baseStyle = ''): string {
+type BulletType = 'none' | 'ul' | 'ol';
+
+interface ParagraphResult {
+  html: string;
+  bulletType: BulletType;
+  level: number;
+}
+
+/**
+ * Build HTML for a single <a:p> paragraph element.
+ * Returns { html, bulletType, level } — html is '' for empty paragraphs.
+ */
+function buildParagraphHtml(pXml: string, baseStyle = ''): ParagraphResult {
   const runMatches = [...pXml.matchAll(/<a:r(?:\s[^>]*)?>[\s\S]*?<\/a:r>/g)];
-  if (runMatches.length === 0) return '';
+  if (runMatches.length === 0) return { html: '', bulletType: 'none', level: 0 };
 
   const html = runMatches.map((m) => buildRunHtml(m[0])).join('');
-  if (!html.trim()) return '';
+  if (!html.trim()) return { html: '', bulletType: 'none', level: 0 };
 
   const lvlMatch = pXml.match(/\blvl="(\d+)"/);
   const level    = lvlMatch ? parseInt(lvlMatch[1]) : 0;
   const indent   = level > 0 ? `padding-right:${level * 16}px;` : '';
 
-  return `<p style="margin:0 0 8px;line-height:1.8;font-size:15px;color:inherit;direction:rtl;${indent}${baseStyle}">${html}</p>`;
+  // Detect bullet type from <a:pPr>
+  const pPrMatch = pXml.match(/<a:pPr[\s\S]*?(?:<\/a:pPr>|\/>)/);
+  const pPrXml = pPrMatch ? pPrMatch[0] : '';
+
+  let bulletType: BulletType = 'none';
+
+  if (/<a:buNone(?:\s|\/|>)/.test(pPrXml)) {
+    bulletType = 'none';
+  } else if (/<a:buAutoNum(?:\s|\/|>)/.test(pPrXml)) {
+    bulletType = 'ol';
+  } else if (
+    /<a:buChar(?:\s|\/|>)/.test(pPrXml) ||
+    /<a:buClr(?:\s|\/|>)/.test(pPrXml) ||
+    /<a:buFont(?:\s|\/|>)/.test(pPrXml)
+  ) {
+    bulletType = 'ul';
+  }
+
+  if (bulletType === 'none') {
+    const paraHtml = `<p style="margin:0 0 8px;line-height:1.8;font-size:15px;color:inherit;direction:rtl;${indent}${baseStyle}">${html}</p>`;
+    return { html: paraHtml, bulletType: 'none', level };
+  }
+
+  // For list items, return just the inner html — the caller wraps in <li>
+  const liInner = indent
+    ? `<span style="${indent}">${html}</span>`
+    : html;
+  return { html: liInner, bulletType, level };
 }
 
 interface SlideContent {
@@ -68,12 +109,19 @@ interface SlideContent {
 /**
  * Parse a slide XML and extract:
  * - title  : text from the title/ctrTitle shape placeholder
- * - bodyHtml: formatted HTML (paragraphs, bold, italic, highlight) from body shapes
+ * - bodyHtml: formatted HTML (paragraphs, bold, italic, highlight, bullets, tables) from body shapes
  * - plainText: merged plain text for downstream logic
  */
 function extractSlideContent(xml: string): SlideContent {
   const titleParts: string[] = [];
-  const bodyParas:  string[] = [];
+
+  // Collect paragraph results first, then group into list blocks
+  interface ParaEntry {
+    html: string;
+    bulletType: BulletType;
+    level: number;
+  }
+  const paraEntries: ParaEntry[] = [];
 
   // Each <p:sp> is one shape; they don't nest in slide XML
   for (const spMatch of xml.matchAll(/<p:sp[\s>][\s\S]*?<\/p:sp>/g)) {
@@ -99,17 +147,91 @@ function extractSlideContent(xml: string): SlideContent {
         .trim();
       if (titleText) titleParts.push(titleText);
     } else {
-      // Body: formatted HTML
+      // Body: formatted HTML with bullet detection
       for (const pMatch of pMatches) {
-        const paraHtml = buildParagraphHtml(pMatch[0]);
-        if (paraHtml) bodyParas.push(paraHtml);
+        const result = buildParagraphHtml(pMatch[0]);
+        if (result.html) {
+          paraEntries.push(result);
+        }
       }
     }
   }
 
+  // ── Extract tables from <p:graphicFrame> elements ──────────────────────────
+  const tableHtmlParts: string[] = [];
+  for (const gfMatch of xml.matchAll(/<p:graphicFrame[\s>][\s\S]*?<\/p:graphicFrame>/g)) {
+    const gfXml = gfMatch[0];
+    const tblMatch = gfXml.match(/<a:tbl>([\s\S]*?)<\/a:tbl>/);
+    if (!tblMatch) continue;
+
+    const tblXml = tblMatch[1];
+    const rows = [...tblXml.matchAll(/<a:tr(?:\s[^>]*)?>[\s\S]*?<\/a:tr>/g)];
+    if (rows.length === 0) continue;
+
+    const rowsHtml: string[] = [];
+    rows.forEach((rowMatch, rowIdx) => {
+      const cells = [...rowMatch[0].matchAll(/<a:tc(?:\s[^>]*)?>[\s\S]*?<\/a:tc>/g)];
+      const cellsHtml = cells.map((cellMatch) => {
+        const cellTexts = [...cellMatch[0].matchAll(/<a:t(?:[^>]*)>([\s\S]*?)<\/a:t>/g)]
+          .map((t) => t[1].replace(/\u0000/g, '').replace(/\x00/g, ''))
+          .join('');
+        const escaped = escapeHtml(cellTexts);
+        const tag = rowIdx === 0 ? 'th' : 'td';
+        const style = rowIdx === 0
+          ? 'padding:8px 12px;border:1px solid #cbd5e1;background:#f1f5f9;font-weight:700;text-align:right;direction:rtl;'
+          : 'padding:8px 12px;border:1px solid #cbd5e1;text-align:right;direction:rtl;';
+        return `<${tag} style="${style}">${escaped}</${tag}>`;
+      }).join('');
+
+      const rowBg = rowIdx > 0 && rowIdx % 2 === 0
+        ? 'background:#f8fafc;'
+        : '';
+      rowsHtml.push(`<tr style="${rowBg}">${cellsHtml}</tr>`);
+    });
+
+    tableHtmlParts.push(
+      `<div style="overflow-x:auto;margin-bottom:16px;">` +
+      `<table style="width:100%;border-collapse:collapse;direction:rtl;font-size:14px;color:#1e293b;">` +
+      rowsHtml.join('') +
+      `</table></div>`
+    );
+  }
+
+  // ── Group consecutive bullet paragraphs into <ul>/<ol> blocks ─────────────
+  const bodyParts: string[] = [];
+  let i = 0;
+  while (i < paraEntries.length) {
+    const entry = paraEntries[i];
+    if (entry.bulletType === 'none') {
+      bodyParts.push(entry.html);
+      i++;
+    } else {
+      // Collect consecutive entries of the same bulletType
+      const tag = entry.bulletType; // 'ul' or 'ol'
+      const items: string[] = [];
+      while (
+        i < paraEntries.length &&
+        paraEntries[i].bulletType === tag
+      ) {
+        items.push(
+          `<li style="margin-bottom:4px;line-height:1.8;font-size:15px;direction:rtl;">${paraEntries[i].html}</li>`
+        );
+        i++;
+      }
+      bodyParts.push(
+        `<${tag} style="margin:0 0 12px;padding-right:24px;direction:rtl;">` +
+        items.join('') +
+        `</${tag}>`
+      );
+    }
+  }
+
+  // Append any extracted table HTML
+  bodyParts.push(...tableHtmlParts);
+
   const title    = sanitizeText(titleParts.join(' '));
-  const bodyHtml = bodyParas.join('');
-  const bodyPlain = bodyParas
+  const bodyHtml = bodyParts.join('');
+  const bodyPlain = bodyParts
     .map((p) => p.replace(/<[^>]+>/g, ''))
     .join(' ')
     .replace(/\s+/g, ' ')
@@ -387,6 +509,80 @@ function groupSlidesIntoSections(slides: SlideData[]): Array<{
   return groups;
 }
 
+// ─── PNG render via LibreOffice ───────────────────────────────────────────────
+
+function execFilePromise(cmd: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, { timeout: 120_000 }, (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+async function renderSlidesAsPng(
+  filePath: string,
+  assetId: string,
+  supabase: SupabaseClient,
+  log: (msg: string) => void
+): Promise<string[] | null> {
+  const tmpDir = `/tmp/pptx-render-${assetId}`;
+  try {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    await execFilePromise('libreoffice', [
+      '--headless',
+      '--convert-to', 'png',
+      '--outdir', tmpDir,
+      filePath,
+    ]);
+  } catch (err: any) {
+    logger.warn({ assetId, err: err.message }, '[PPTX] LibreOffice not available, falling back to HTML mode');
+    log('LibreOffice אינו זמין, עובר למצב HTML');
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    return null;
+  }
+
+  // Collect PNGs in order
+  let pngFiles: string[];
+  try {
+    pngFiles = fs.readdirSync(tmpDir)
+      .filter((f) => f.endsWith('.png'))
+      .sort((a, b) => {
+        const numA = parseInt(a.match(/(\d+)/)?.[1] || '0');
+        const numB = parseInt(b.match(/(\d+)/)?.[1] || '0');
+        return numA - numB;
+      });
+  } catch {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    return null;
+  }
+
+  const publicUrls: string[] = [];
+  for (let i = 0; i < pngFiles.length; i++) {
+    const pngPath = path.join(tmpDir, pngFiles[i]);
+    const storagePath = `pptx-media/${assetId}/slide${i + 1}-rendered.png`;
+    try {
+      const bytes = fs.readFileSync(pngPath);
+      const { error } = await supabase.storage
+        .from('course-assets')
+        .upload(storagePath, bytes, { contentType: 'image/png', upsert: true });
+      if (error) {
+        logger.warn({ storagePath, err: error.message }, '[PPTX] PNG upload failed');
+        publicUrls.push('');
+      } else {
+        const { data } = supabase.storage.from('course-assets').getPublicUrl(storagePath);
+        publicUrls.push(data.publicUrl);
+      }
+    } catch (err: any) {
+      logger.warn({ pngPath, err: err.message }, '[PPTX] PNG read/upload error');
+      publicUrls.push('');
+    }
+  }
+
+  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  return publicUrls;
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 // Accepts a file path (temp file on disk) instead of a Buffer
 // This means the 271MB PPTX is NEVER loaded fully into RAM
@@ -395,6 +591,7 @@ export async function processPptx(
   filePath: string,
   assetId: string,
   originalName: string,
+  renderMode: 'html' | 'image' = 'html',
   supabase?: SupabaseClient,
   onProgress?: (message: string) => void
 ): Promise<ProcessingResult> {
@@ -467,7 +664,17 @@ export async function processPptx(
   // Free XML entries from memory — we don't need them anymore
   xmlEntries.clear();
 
-  // ── Phase 2: Upload media (reads one entry at a time from disk) ───────────
+  // ── Phase 2: PNG render mode (LibreOffice) ────────────────────────────────
+  let renderedPngs: string[] | null = null;
+  if (renderMode === 'image' && supabase) {
+    log(`מרנדר שקופיות כתמונות PNG...`);
+    renderedPngs = await renderSlidesAsPng(filePath, assetId, supabase, log);
+    if (renderedPngs) {
+      log(`רינדור PNG הושלם: ${renderedPngs.length} תמונות`);
+    }
+  }
+
+  // ── Phase 3: Upload media (reads one entry at a time from disk) ───────────
   if (supabase) {
     log(`מעלה תמונות וסרטונים...`);
     for (let i = 0; i < slides.length; i++) {
@@ -491,7 +698,7 @@ export async function processPptx(
     log(`העלאת מדיה הושלמה`);
   }
 
-  // ── Phase 3: AI enrichment ────────────────────────────────────────────────
+  // ── Phase 4: AI enrichment ────────────────────────────────────────────────
   log(`מעשיר תוכן עם AI...`);
   const pagesToEnrich = slides
     .filter((s) => !s.isChapterSlide && s.text.trim().length >= 30)
@@ -500,13 +707,22 @@ export async function processPptx(
   const aiResults = await enrichPagesBatch(pagesToEnrich, 5);
   log(`AI הושלם: ${aiResults.size} עמודים עושרו`);
 
-  // ── Phase 4: Build output ─────────────────────────────────────────────────
+  // ── Phase 5: Build output ─────────────────────────────────────────────────
   const sectionGroups = groupSlidesIntoSections(slides);
   const sections: SectionOutput[] = [];
   const pages: PageOutput[] = [];
   const questions: QuestionOutput[] = [];
   let globalPageIndex = 0;
   let enrichIdx = 0;
+  // Map from original slide index (0-based in slides[]) to rendered PNG url
+  const pngBySlidePos = renderedPngs ? new Map<number, string>() : null;
+  if (renderedPngs && pngBySlidePos) {
+    renderedPngs.forEach((url, i) => pngBySlidePos.set(i, url));
+  }
+
+  // Build a map from slide.index to position in slides array for PNG lookup
+  const slideIndexToPos = new Map<number, number>();
+  slides.forEach((s, pos) => slideIndexToPos.set(s.index, pos));
 
   for (const group of sectionGroups) {
     const sectionIndex = sections.length;
@@ -521,12 +737,26 @@ export async function processPptx(
       const aiData = aiResults.get(enrichIdx);
       slide.aiSummary = aiData?.summary;
 
+      // Determine htmlContent — PNG mode overrides if we have a rendered image
+      let htmlContent: string;
+      if (renderedPngs && pngBySlidePos) {
+        const pos = slideIndexToPos.get(slide.index);
+        const pngUrl = pos !== undefined ? pngBySlidePos.get(pos) : undefined;
+        if (pngUrl) {
+          htmlContent = `<div style="text-align:center"><img src="${pngUrl}" style="max-width:100%;border-radius:12px;" alt="שקופית ${slide.index}" /></div>`;
+        } else {
+          htmlContent = buildSlideHtml(slide, totalSlides);
+        }
+      } else {
+        htmlContent = buildSlideHtml(slide, totalSlides);
+      }
+
       pages.push({
         sectionIndex,
         orderIndex: globalPageIndex,
         pageType: (slide.externalVideoUrl || slide.videoStoragePath) ? 'video' : 'pptx_slide',
         title: sanitizeText(slide.slideTitle || slide.text).substring(0, 80) || `שקופית ${slide.index}`,
-        htmlContent: buildSlideHtml(slide, totalSlides),
+        htmlContent,
         assetId,
         videoStoragePath: slide.videoStoragePath,
         slideIndex: slide.index,

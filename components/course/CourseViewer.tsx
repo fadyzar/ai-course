@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Database } from '@/types/database.types';
 import { QuestionBlock } from './QuestionBlock';
@@ -12,7 +12,7 @@ import {
   CheckCircle2, ChevronRight, ChevronLeft, ChevronDown, ChevronUp,
   BookOpen, Video, FileText, Presentation, ClipboardList,
   Play, Trophy, Sun, Moon, PanelLeftOpen, PanelLeftClose, Plus,
-  ArrowRight,
+  ArrowRight, AlignJustify, Layers, Pencil,
 } from 'lucide-react';
 
 type Section  = Database['public']['Tables']['course_sections']['Row'];
@@ -97,6 +97,30 @@ function PageContent({ page, dark }: { page: Page; dark: boolean }) {
   );
 }
 
+/* ─── Caption HTML helpers ───────────────────────────────────────── */
+const CAPTION_PREFIX = '<div class="slide-caption"';
+
+function extractCaption(htmlContent: string): string {
+  if (!htmlContent.startsWith(CAPTION_PREFIX)) return '';
+  const endIdx = htmlContent.indexOf('</div>');
+  if (endIdx === -1) return '';
+  // Extract the text inside the div
+  const inner = htmlContent.substring(0, endIdx + 6);
+  const textMatch = inner.match(/^<div[^>]*>([\s\S]*?)<\/div>/);
+  return textMatch ? textMatch[1] : '';
+}
+
+function buildCaptionDiv(text: string): string {
+  return `<div class="slide-caption" style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:12px 16px;margin-bottom:12px;font-size:14px;color:#0369a1;direction:rtl;">${text}</div>`;
+}
+
+function stripCaption(htmlContent: string): string {
+  if (!htmlContent.startsWith(CAPTION_PREFIX)) return htmlContent;
+  const endIdx = htmlContent.indexOf('</div>');
+  if (endIdx === -1) return htmlContent;
+  return htmlContent.substring(endIdx + 6);
+}
+
 /* ─── Main component ─────────────────────────────────────────────── */
 export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseViewerProps) {
   const { profile } = useAuth();
@@ -111,6 +135,11 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
   const [collapsedSections, setCollapsedSections]     = useState<Set<string>>(new Set());
   const [dark, setDark]                               = useState(false);
   const [showAddQuestion, setShowAddQuestion]         = useState(false);
+  const [scrollMode, setScrollMode]                   = useState(false);
+  const [editingTitle, setEditingTitle]               = useState<{ type: 'section' | 'page'; id: string; value: string } | null>(null);
+  const [editingCaption, setEditingCaption]           = useState<{ pageId: string; value: string } | null>(null);
+  const [navMode, setNavMode]                         = useState<'detailed' | 'compact'>('detailed');
+  const pageRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   useEffect(() => { loadCourseContent(); }, [courseId]);
 
@@ -120,6 +149,29 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
       setSidebarOpen(false);
     }
   }, []);
+
+  /* IntersectionObserver: track visible page in scroll mode */
+  useEffect(() => {
+    if (!scrollMode || pages.length === 0) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        let best: IntersectionObserverEntry | null = null;
+        for (const e of entries) {
+          if (e.isIntersecting) {
+            if (!best || e.boundingClientRect.top < best.boundingClientRect.top) best = e;
+          }
+        }
+        if (best) {
+          const pid = (best.target as HTMLElement).dataset.pageId;
+          const idx = pages.findIndex(p => p.id === pid);
+          if (idx >= 0) setCurrentPageIndex(idx);
+        }
+      },
+      { threshold: 0.15, rootMargin: '-116px 0px -40% 0px' },
+    );
+    pages.forEach(p => { const el = pageRefs.current[p.id]; if (el) observer.observe(el); });
+    return () => observer.disconnect();
+  }, [scrollMode, pages]);
 
   /* Keyboard navigation */
   useEffect(() => {
@@ -161,13 +213,20 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
   const goToPage = useCallback((index: number) => {
     if (index >= 0 && index < pages.length) {
       setCurrentPageIndex(index);
-      /* Close sidebar on mobile after navigation */
-      if (typeof window !== 'undefined' && window.innerWidth < 1024) {
-        setSidebarOpen(false);
+      if (scrollMode) {
+        const el = pageRefs.current[pages[index]?.id];
+        if (el) {
+          const y = el.getBoundingClientRect().top + window.scrollY - 132;
+          window.scrollTo({ top: y, behavior: 'smooth' });
+        }
+      } else {
+        if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+          setSidebarOpen(false);
+        }
+        window.scrollTo({ top: 0, behavior: 'smooth' });
       }
-      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
-  }, [pages.length]);
+  }, [pages, scrollMode]);
 
   const toggleSection = (id: string) => {
     setCollapsedSections(prev => {
@@ -175,6 +234,45 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
+  };
+
+  const saveTitle = async () => {
+    if (!editingTitle) return;
+    const trimmed = editingTitle.value.trim();
+    if (!trimmed) { setEditingTitle(null); return; }
+    if (editingTitle.type === 'section') {
+      await (supabase.from('course_sections') as any).update({ title: trimmed }).eq('id', editingTitle.id);
+      setSections(prev => prev.map(s => s.id === editingTitle.id ? { ...s, title: trimmed } : s));
+    } else {
+      await (supabase.from('course_pages') as any).update({ title: trimmed }).eq('id', editingTitle.id);
+      setPages(prev => prev.map(p => p.id === editingTitle.id ? { ...p, title: trimmed } : p));
+    }
+    setEditingTitle(null);
+  };
+
+  /* ── Caption save ── */
+  const saveCaption = async () => {
+    if (!editingCaption) return;
+    const { pageId, value } = editingCaption;
+    const page = pages.find(p => p.id === pageId);
+    if (!page) { setEditingCaption(null); return; }
+
+    const base = stripCaption(page.html_content || '');
+    const newHtml = value.trim()
+      ? buildCaptionDiv(value.trim()) + base
+      : base;
+
+    await (supabase.from('course_pages') as any)
+      .update({ html_content: newHtml })
+      .eq('id', pageId);
+
+    setPages(prev => prev.map(p => p.id === pageId ? { ...p, html_content: newHtml } : p));
+    setEditingCaption(null);
+  };
+
+  const startEditCaption = (page: Page) => {
+    const existing = extractCaption(page.html_content || '');
+    setEditingCaption({ pageId: page.id, value: existing });
   };
 
   const totalQ    = questions.length;
@@ -249,6 +347,76 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
   );
 
   const isVideoPage = currentPage?.page_type === 'video';
+
+  /* ── Caption edit UI (shared between slide and scroll mode) ── */
+  const renderCaptionEditor = (page: Page) => {
+    if (!isTeacher || isPreview) return null;
+    const isEditing = editingCaption?.pageId === page.id;
+
+    if (isEditing) {
+      return (
+        <div style={{
+          maxWidth: 768, margin: '0 auto', padding: '12px 20px',
+          background: dark ? '#0f172a' : '#f0f9ff',
+        }}>
+          <textarea
+            autoFocus
+            value={editingCaption.value}
+            onChange={e => setEditingCaption(prev => prev ? { ...prev, value: e.target.value } : null)}
+            rows={3}
+            placeholder="הכנס הסבר לשקופית..."
+            style={{
+              width: '100%', padding: '10px 12px',
+              border: `1px solid ${T.accent}`, borderRadius: 8,
+              background: T.cardBg, color: T.text,
+              fontSize: 14, fontFamily: 'inherit',
+              direction: 'rtl', resize: 'vertical', outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, justifyContent: 'flex-end' }}>
+            <button
+              onClick={() => setEditingCaption(null)}
+              style={{
+                padding: '6px 14px', borderRadius: 6,
+                border: `1px solid ${T.btnBorder}`,
+                background: T.btnBg, color: T.textMuted,
+                fontSize: 13, fontFamily: 'inherit', cursor: 'pointer',
+              }}
+            >ביטול</button>
+            <button
+              onClick={saveCaption}
+              style={{
+                padding: '6px 14px', borderRadius: 6,
+                border: `1px solid ${T.accent}`,
+                background: T.accent, color: '#fff',
+                fontSize: 13, fontFamily: 'inherit', cursor: 'pointer',
+              }}
+            >שמור הסבר</button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ maxWidth: 768, margin: '0 auto', padding: '8px 20px' }}>
+        <button
+          onClick={() => startEditCaption(page)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '6px 12px',
+            border: `1px dashed ${T.btnBorder}`,
+            borderRadius: 6, background: 'transparent',
+            color: T.textMuted, fontSize: 13, fontFamily: 'inherit',
+            cursor: 'pointer', transition: 'all 0.15s',
+          }}
+        >
+          <Pencil style={{ width: 13, height: 13 }} />
+          הוסף הסבר
+        </button>
+      </div>
+    );
+  };
 
   return (
     <div
@@ -394,6 +562,24 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
             </button>
           )}
 
+          {/* Scroll / slide mode toggle */}
+          <button
+            onClick={() => setScrollMode(m => !m)}
+            title={scrollMode ? 'מצב שקופיות' : 'מצב גלילה'}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              padding: '5px 10px', borderRadius: 8, border: `1px solid ${scrollMode ? T.accent : T.btnBorder}`,
+              background: scrollMode ? T.accentBg : T.btnBg, cursor: 'pointer',
+              color: scrollMode ? T.accent : T.textMuted, fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
+              transition: 'all 0.15s', flexShrink: 0,
+            }}
+          >
+            {scrollMode
+              ? <><Layers style={{ width: 13, height: 13 }} /><span className="hidden sm:inline">שקופיות</span></>
+              : <><AlignJustify style={{ width: 13, height: 13 }} /><span className="hidden sm:inline">גלילה</span></>
+            }
+          </button>
+
           {/* Dark mode toggle */}
           <button
             onClick={() => setDark(d => !d)}
@@ -444,12 +630,29 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>תוכן הקורס</span>
-                <span style={{
-                  fontSize: 11, color: T.badgeText, background: T.badgeBg,
-                  borderRadius: 20, padding: '2px 10px', border: `1px solid ${T.badgeBorder}`,
-                }}>
-                  {pages.length} שיעורים
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {/* Nav mode toggle */}
+                  <button
+                    onClick={() => setNavMode(m => m === 'detailed' ? 'compact' : 'detailed')}
+                    title={navMode === 'detailed' ? 'עבור למצב מקוצר' : 'עבור למצב מפורט'}
+                    style={{
+                      fontSize: 11, padding: '2px 8px',
+                      border: `1px solid ${T.btnBorder}`,
+                      borderRadius: 10, background: navMode === 'compact' ? T.accentBg : T.btnBg,
+                      color: navMode === 'compact' ? T.accent : T.textMuted,
+                      cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600,
+                      transition: 'all 0.15s',
+                    }}
+                  >
+                    {navMode === 'detailed' ? 'מקוצר' : 'מפורט'}
+                  </button>
+                  <span style={{
+                    fontSize: 11, color: T.badgeText, background: T.badgeBg,
+                    borderRadius: 20, padding: '2px 10px', border: `1px solid ${T.badgeBorder}`,
+                  }}>
+                    {pages.length} שיעורים
+                  </span>
+                </div>
               </div>
 
               {/* Progress bar */}
@@ -490,6 +693,48 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
                 const isCollapsed  = collapsedSections.has(section.id);
                 const hasActiveItem = items.some(({ index }) => index === currentPageIndex);
 
+                /* ── COMPACT MODE: show only section name + slide count ── */
+                if (navMode === 'compact') {
+                  const firstPageIndex = items[0]?.index ?? 0;
+                  return (
+                    <button
+                      key={section.id}
+                      onClick={() => goToPage(firstPageIndex)}
+                      style={{
+                        width: '100%', display: 'flex', alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '10px 16px',
+                        background: hasActiveItem ? T.sectionActive : 'transparent',
+                        border: 'none', borderBottom: `1px solid ${T.sidebarBorder}`,
+                        cursor: 'pointer', textAlign: 'right',
+                        borderRight: hasActiveItem ? `2px solid ${T.activeBorder}` : '2px solid transparent',
+                        transition: 'background 0.15s',
+                      }}
+                    >
+                      <div style={{ flex: 1, textAlign: 'right' }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: T.accent, marginBottom: 2 }}>
+                          פרק {gi + 1}
+                        </div>
+                        <div style={{
+                          fontSize: 13, fontWeight: 600,
+                          color: hasActiveItem ? T.accent : T.text,
+                          lineHeight: 1.4,
+                        }}>
+                          {section.title}
+                        </div>
+                      </div>
+                      <span style={{
+                        fontSize: 11, color: T.badgeText, background: T.badgeBg,
+                        borderRadius: 10, padding: '2px 8px',
+                        border: `1px solid ${T.badgeBorder}`, flexShrink: 0, marginRight: 8,
+                      }}>
+                        {items.length}
+                      </span>
+                    </button>
+                  );
+                }
+
+                /* ── DETAILED MODE (default) ── */
                 return (
                   <div key={section.id}>
                     {/* Section header */}
@@ -512,12 +757,34 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
                             פרק {gi + 1}
                           </span>
                         </div>
-                        <p style={{
-                          fontSize: 13, fontWeight: 600, margin: 0, lineHeight: 1.4,
-                          color: hasActiveItem ? T.accent : T.text,
-                        }}>
-                          {section.title}
-                        </p>
+                        {isTeacher && editingTitle?.id === section.id ? (
+                          <input
+                            autoFocus
+                            value={editingTitle.value}
+                            onChange={e => setEditingTitle(prev => prev ? { ...prev, value: e.target.value } : null)}
+                            onBlur={saveTitle}
+                            onKeyDown={e => { if (e.key === 'Enter') saveTitle(); if (e.key === 'Escape') setEditingTitle(null); }}
+                            onClick={e => e.stopPropagation()}
+                            style={{
+                              fontSize: 13, fontWeight: 600, color: T.text, background: T.cardBg,
+                              border: `1px solid ${T.accent}`, borderRadius: 4, padding: '2px 6px',
+                              width: '100%', fontFamily: 'inherit', outline: 'none',
+                            }}
+                          />
+                        ) : (
+                          <p
+                            style={{
+                              fontSize: 13, fontWeight: 600, margin: 0, lineHeight: 1.4,
+                              color: hasActiveItem ? T.accent : T.text,
+                              cursor: isTeacher ? 'text' : undefined,
+                            }}
+                            title={isTeacher ? 'לחץ לעריכת שם הפרק' : undefined}
+                            onClick={isTeacher ? (e) => { e.stopPropagation(); setEditingTitle({ type: 'section', id: section.id, value: section.title }); } : undefined}
+                          >
+                            {section.title}
+                            {isTeacher && <Pencil style={{ width: 9, height: 9, opacity: 0.3, marginRight: 5, display: 'inline', verticalAlign: 'middle' }} />}
+                          </p>
+                        )}
                         <p style={{ fontSize: 11, color: T.textMuted, marginTop: 2, marginBottom: 0 }}>
                           {items.length} שיעורים
                         </p>
@@ -571,16 +838,38 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
                           </div>
 
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <p style={{
-                              fontSize: 13, lineHeight: 1.45, margin: 0,
-                              color: isActive ? T.accent : T.text,
-                              fontWeight: isActive ? 600 : 400,
-                              overflow: 'hidden', textOverflow: 'ellipsis',
-                              display: '-webkit-box',
-                              WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as any,
-                            }}>
-                              {page.title || `שיעור ${index + 1}`}
-                            </p>
+                            {isTeacher && editingTitle?.id === page.id ? (
+                              <input
+                                autoFocus
+                                value={editingTitle.value}
+                                onChange={e => setEditingTitle(prev => prev ? { ...prev, value: e.target.value } : null)}
+                                onBlur={saveTitle}
+                                onKeyDown={e => { if (e.key === 'Enter') saveTitle(); if (e.key === 'Escape') setEditingTitle(null); }}
+                                onClick={e => e.stopPropagation()}
+                                style={{
+                                  fontSize: 13, color: T.text, background: T.cardBg,
+                                  border: `1px solid ${T.accent}`, borderRadius: 4, padding: '2px 6px',
+                                  width: '100%', fontFamily: 'inherit', outline: 'none',
+                                }}
+                              />
+                            ) : (
+                              <p
+                                style={{
+                                  fontSize: 13, lineHeight: 1.45, margin: 0,
+                                  color: isActive ? T.accent : T.text,
+                                  fontWeight: isActive ? 600 : 400,
+                                  overflow: 'hidden', textOverflow: 'ellipsis',
+                                  display: '-webkit-box',
+                                  WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as any,
+                                  cursor: isTeacher ? 'text' : undefined,
+                                }}
+                                title={isTeacher ? 'לחץ לעריכת שם השיעור' : undefined}
+                                onClick={isTeacher ? (e) => { e.stopPropagation(); setEditingTitle({ type: 'page', id: page.id, value: page.title || '' }); } : undefined}
+                              >
+                                {page.title || `שיעור ${index + 1}`}
+                                {isTeacher && <Pencil style={{ width: 9, height: 9, opacity: 0.3, marginRight: 5, display: 'inline', verticalAlign: 'middle' }} />}
+                              </p>
+                            )}
                             <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 4, flexWrap: 'wrap' }}>
                               <LessonIcon type={page.page_type || 'text'} size={11} dark={dark} />
                               <span style={{ fontSize: 11, color: T.textMuted }}>
@@ -611,12 +900,133 @@ export function CourseViewer({ courseId, attemptId, isPreview = false }: CourseV
 
         {/* ── MAIN CONTENT ── */}
         <main style={{ flex: 1, minWidth: 0, background: T.contentBg }}>
-          {currentPage && (
+
+          {/* ══ SCROLL MODE: all pages in one long view ══ */}
+          {scrollMode && pages.map((page, index) => {
+            const pqs    = questions.filter(q => q.page_id === page.id);
+            const isVid  = page.page_type === 'video';
+            const sec    = sections.find(s => s.id === page.section_id);
+            const firstInSection = index === 0 || pages[index - 1].section_id !== page.section_id;
+
+            return (
+              <div
+                key={page.id}
+                data-page-id={page.id}
+                ref={el => { pageRefs.current[page.id] = el; }}
+              >
+                {/* Section label */}
+                {firstInSection && sec && (
+                  <div style={{
+                    padding: '14px 24px 10px',
+                    background: dark ? '#0a1628' : '#f0f9ff',
+                    borderBottom: `1px solid ${T.divider}`,
+                  }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: T.accent, textTransform: 'uppercase', letterSpacing: '0.7px' }}>
+                      {sec.title}
+                    </span>
+                  </div>
+                )}
+
+                {/* Lesson title */}
+                <div style={{ padding: '16px 24px 12px', background: T.cardBg, borderBottom: `1px solid ${T.divider}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <LessonIcon type={page.page_type || 'text'} size={16} dark={dark} />
+                    {isTeacher && editingTitle?.id === page.id ? (
+                      <input
+                        autoFocus
+                        value={editingTitle.value}
+                        onChange={e => setEditingTitle(prev => prev ? { ...prev, value: e.target.value } : null)}
+                        onBlur={saveTitle}
+                        onKeyDown={e => { if (e.key === 'Enter') saveTitle(); if (e.key === 'Escape') setEditingTitle(null); }}
+                        style={{
+                          fontSize: 18, fontWeight: 700, color: T.text, background: T.cardBg,
+                          border: `1px solid ${T.accent}`, borderRadius: 6, padding: '3px 8px',
+                          flex: 1, fontFamily: 'inherit', outline: 'none',
+                        }}
+                      />
+                    ) : (
+                      <h2
+                        style={{
+                          fontSize: 18, fontWeight: 700, color: T.text, margin: 0,
+                          cursor: isTeacher ? 'text' : undefined,
+                          display: 'flex', alignItems: 'center', gap: 6,
+                        }}
+                        title={isTeacher ? 'לחץ לעריכת שם השיעור' : undefined}
+                        onClick={isTeacher ? () => setEditingTitle({ type: 'page', id: page.id, value: page.title || '' }) : undefined}
+                      >
+                        {page.title || `שיעור ${index + 1}`}
+                        {isTeacher && <Pencil style={{ width: 13, height: 13, opacity: 0.3 }} />}
+                      </h2>
+                    )}
+                  </div>
+                </div>
+
+                {/* Page content */}
+                <div style={{ background: isVid ? '#000' : T.cardBg }}>
+                  <PageContent page={page} dark={dark} />
+                </div>
+
+                {/* Caption editor (teachers only, scroll mode) */}
+                {renderCaptionEditor(page)}
+
+                {/* Questions */}
+                {pqs.length > 0 && (
+                  <div style={{ maxWidth: 768, margin: '0 auto', padding: '24px 20px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+                      <div style={{
+                        width: 30, height: 30, borderRadius: '50%',
+                        background: dark ? 'rgba(251,146,60,0.12)' : '#fff7ed',
+                        border: `1px solid ${dark ? 'rgba(251,146,60,0.3)' : '#fed7aa'}`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        flexShrink: 0, fontSize: 14, fontWeight: 900, color: dark ? '#fb923c' : '#ea580c',
+                      }}>?</div>
+                      <h3 style={{ fontSize: 16, fontWeight: 700, color: T.text, margin: 0 }}>שאלות לבדיקת הבנה</h3>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      {pqs.map(q => (
+                        <QuestionBlock key={q.id} question={q} onAnswer={handleAnswer} disabled={isPreview} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Gap between pages */}
+                {index < pages.length - 1 && (
+                  <div style={{ height: 8, background: T.outerBg, borderTop: `1px solid ${T.divider}`, borderBottom: `1px solid ${T.divider}` }} />
+                )}
+              </div>
+            );
+          })}
+
+          {/* Completion banner (scroll mode) */}
+          {scrollMode && answeredQ === totalQ && totalQ > 0 && (
+            <div style={{ maxWidth: 768, margin: '0 auto', padding: '24px 20px 56px' }}>
+              <div style={{
+                background: T.successBg, border: `1px solid ${T.successBorder}`,
+                borderRadius: 14, padding: '36px 28px', textAlign: 'center',
+              }}>
+                <div style={{
+                  width: 60, height: 60, borderRadius: '50%',
+                  background: T.successBg, border: `2px solid ${T.successBorder}`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  margin: '0 auto 14px', fontSize: 28,
+                }}>🏆</div>
+                <h3 style={{ fontSize: 22, fontWeight: 800, color: T.text, marginBottom: 6 }}>כל הכבוד! סיימת את הקורס</h3>
+                <p style={{ fontSize: 16, color: T.textMuted }}>ציון: {correctQ} מתוך {totalQ} ({scoreP}%)</p>
+              </div>
+            </div>
+          )}
+
+          {/* ══ SLIDE MODE: one page at a time ══ */}
+          {!scrollMode && currentPage && (
             <>
               {/* Page content: video full-bleed, others centered */}
               <div style={{ background: isVideoPage ? '#000' : T.cardBg }}>
                 <PageContent page={currentPage} dark={dark} />
               </div>
+
+              {/* Caption editor (teachers only, slide mode) */}
+              {renderCaptionEditor(currentPage)}
 
               {/* Below content: questions + nav + completion */}
               <div style={{ maxWidth: 768, margin: '0 auto', padding: '24px 20px 56px' }}>
