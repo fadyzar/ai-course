@@ -96,24 +96,37 @@ async function tryGraphApi(shareUrl: string): Promise<Response | null> {
  * When OneDrive returns an HTML page instead of the file, extract the real download URL from the HTML.
  * Works for SPO-migrated consumer OneDrive files.
  */
-async function tryExtractDownloadUrlFromHtml(htmlUrl: string): Promise<Response | null> {
+async function tryExtractDownloadUrlFromHtml(htmlUrl: string, existingHtml?: string): Promise<Response | null> {
   try {
-    const htmlResp = await fetch(htmlUrl, {
-      redirect: 'follow',
-      headers: { 'User-Agent': BROWSER_UA, Accept: 'text/html,*/*' },
-    });
-    const ct = htmlResp.headers.get('content-type') || '';
-    if (!ct.includes('text/html')) return htmlResp; // Already a file!
-    if (!htmlResp.ok) { await htmlResp.body?.cancel(); return null; }
+    let html = existingHtml || '';
+    if (!html) {
+      const htmlResp = await fetch(htmlUrl, {
+        redirect: 'follow',
+        headers: { 'User-Agent': BROWSER_UA, Accept: 'text/html,*/*' },
+      });
+      const ct = htmlResp.headers.get('content-type') || '';
+      if (!ct.includes('text/html')) return htmlResp; // Already a file!
+      if (!htmlResp.ok) { await htmlResp.body?.cancel(); return null; }
+      html = await htmlResp.text();
+    }
 
-    const html = await htmlResp.text();
-
-    // Patterns Microsoft embeds in the OneDrive download HTML page
+    // Patterns Microsoft embeds in the OneDrive/SharePoint download HTML page
     const patterns = [
-      /"downloadUrl"\s*:\s*"(https:[^"\\]+(?:\\.[^"\\]*)*)"/,
-      /"download_url"\s*:\s*"(https:[^"\\]+(?:\\.[^"\\]*)*)"/,
-      /download_href['":\s]+=?\s*['"]?(https:\/\/[^'"&\s<>]+)/i,
+      // Standard camelCase / snake_case downloadUrl variants (case-insensitive)
+      /"downloadUrl"\s*:\s*"(https:[^"\\]+(?:\\.[^"\\]*)*)"/i,
+      /"download_url"\s*:\s*"(https:[^"\\]+(?:\\.[^"\\]*)*)"/i,
+      /"fileDownloadUrl"\s*:\s*"(https:[^"\\]+(?:\\.[^"\\]*)*)"/i,
+      /"DownloadUrl"\s*:\s*"(https:[^"\\]+(?:\\.[^"\\]*)*)"/,
+      // SharePoint REST API / WOPI patterns
       /"FileUrl"\s*:\s*"(https:[^"\\]+(?:\\.[^"\\]*)*)"/,
+      /"fileGetUrl"\s*:\s*"(https:[^"\\]+(?:\\.[^"\\]*)*)"/,
+      /"streamEndpoint"\s*:\s*"(https:[^"\\]+(?:\\.[^"\\]*)*)"/,
+      // Generic download href / variable assignment
+      /download_href['":\s]+=?\s*['"]?(https:\/\/[^'"&\s<>]+)/i,
+      /download_url\s*=\s*['"]?(https:\/\/[^'"&\s<>]+)/i,
+      // _layouts/15/download.aspx links (SharePoint direct download)
+      /href="([^"]*\/_layouts\/15\/download\.aspx[^"]*)"/i,
+      // Anchor href to file with known extension
       /href="(https:\/\/[^"]*\.(?:pptx|pdf|docx|ppt)[^"]*)"/i,
     ];
 
@@ -123,13 +136,27 @@ async function tryExtractDownloadUrlFromHtml(htmlUrl: string): Promise<Response 
         const dlUrl = match[1]
           .replace(/\\u0026/g, '&')
           .replace(/\\u002F/gi, '/')
-          .replace(/\\\//g, '/');
-        logger.info({ dlUrl }, '[URL-FETCH] Extracted download URL from OneDrive HTML');
+          .replace(/\\\//g, '/')
+          .replace(/&amp;/g, '&');
+        logger.info({ dlUrl: dlUrl.slice(0, 120) }, '[URL-FETCH] Extracted download URL from OneDrive HTML');
         const fileResp = await fetch(dlUrl, { redirect: 'follow', headers: { 'User-Agent': BROWSER_UA } });
         const fileCt = fileResp.headers.get('content-type') || '';
         if (fileResp.ok && !fileCt.includes('text/html')) return fileResp;
         await fileResp.body?.cancel();
       }
+    }
+
+    // Last resort: look for any SharePoint/OneDrive URL that looks like a download endpoint
+    const broadMatch = html.match(/https:\/\/[^"'\s<>]*(?:sharepoint\.com|onedrive\.live\.com)[^"'\s<>]*(?:download|Download|\.pptx|\.pdf|\.docx)[^"'\s<>]*/);
+    if (broadMatch) {
+      const dlUrl = broadMatch[0].replace(/\\u0026/g, '&').replace(/\\\//g, '/').replace(/&amp;/g, '&');
+      logger.info({ dlUrl: dlUrl.slice(0, 120) }, '[URL-FETCH] Broad-match extracted URL from HTML');
+      try {
+        const fileResp = await fetch(dlUrl, { redirect: 'follow', headers: { 'User-Agent': BROWSER_UA } });
+        const fileCt = fileResp.headers.get('content-type') || '';
+        if (fileResp.ok && !fileCt.includes('text/html')) return fileResp;
+        await fileResp.body?.cancel();
+      } catch { /* ignore */ }
     }
   } catch (e: any) {
     logger.debug({ err: e.message }, '[URL-FETCH] HTML extraction failed');
@@ -295,8 +322,12 @@ async function tryManualRedirectWithToken(viewerUrl: string): Promise<Response |
         logger.info({ hop, ct }, '[URL-FETCH] Manual redirect chain: got file');
         return resp;
       }
-      await resp.body?.cancel();
-      break; // HTML dead end
+      // HTML dead end — try to extract download URL from the HTML
+      logger.info({ hop, url: currentUrl.slice(0, 100) }, '[URL-FETCH] Manual redirect chain: HTML dead end, extracting download URL');
+      const htmlBody = await resp.text();
+      const extracted = await tryExtractDownloadUrlFromHtml(currentUrl, htmlBody);
+      if (extracted) return extracted;
+      break;
     }
 
     if (resp.status < 300 || resp.status >= 400) { await resp.body?.cancel(); break; }
@@ -317,8 +348,39 @@ async function tryManualRedirectWithToken(viewerUrl: string): Promise<Response |
       break;
     }
 
-    // If this looks like the real file path, record it
-    if (location.includes('/personal/') && !location.includes('/_layouts/') && !filePath) {
+    // If Office Online viewer URL — extract the `src` param (the actual SharePoint file URL)
+    if (location.includes('view.officeapps.live.com') || location.includes('officeapps.live.com/op/view')) {
+      try {
+        const parsed = new URL(location);
+        const src = parsed.searchParams.get('src');
+        if (src) {
+          logger.info({ src: src.slice(0, 120) }, '[URL-FETCH] Office Online viewer: extracted src URL');
+          // Try HTML extraction on the viewer page to get the download URL
+          const viewerExtracted = await tryExtractDownloadUrlFromHtml(location);
+          if (viewerExtracted) return viewerExtracted;
+          // Also try the src directly (it may be a SharePoint file URL)
+          const srcWithToken = token
+            ? (src.includes('?') ? `${src}&e=${encodeURIComponent(token)}` : `${src}?e=${encodeURIComponent(token)}`)
+            : src;
+          const srcResp = await fetch(srcWithToken, { redirect: 'follow', headers: { 'User-Agent': BROWSER_UA } });
+          const srcCt = srcResp.headers.get('content-type') || '';
+          if (srcResp.ok && !srcCt.includes('text/html')) return srcResp;
+          await srcResp.body?.cancel();
+          // Try SPO download.aspx on the src domain
+          if (src.includes('/personal/')) {
+            const srcUrl = new URL(src);
+            const downloadAspx = `${srcUrl.protocol}//${srcUrl.host}${srcUrl.pathname}/_layouts/15/download.aspx?e=${encodeURIComponent(token)}`;
+            const aspxResp = await fetch(downloadAspx, { redirect: 'follow', headers: { 'User-Agent': BROWSER_UA } });
+            const aspxCt = aspxResp.headers.get('content-type') || '';
+            if (aspxResp.ok && !aspxCt.includes('text/html')) return aspxResp;
+            await aspxResp.body?.cancel();
+          }
+        }
+      } catch { /* ignore */ }
+    }
+
+    // If this looks like the real file path, record it (including _layouts/15/download.aspx)
+    if (location.includes('/personal/') && !filePath) {
       filePath = location;
     }
 
@@ -456,7 +518,12 @@ export async function fetchUrlToTempFile(url: string): Promise<FetchResult> {
       response = await tryConsumerOneDriveDirectDownload(resolved);
       if (!response) response = await tryFollowRedirects(resolved);
       if (!response) response = await tryDownload1(resolved);
+      // Try HTML extraction on the resolved viewer page (1drv.ms/p/c/ format lands on a viewer)
+      if (!response) response = await tryExtractDownloadUrlFromHtml(resolved);
     }
+
+    // Final fallback: try HTML extraction on the original URL itself
+    if (!response) response = await tryExtractDownloadUrlFromHtml(url);
   } else {
     // Generic URL (Google Drive pre-signed, etc.)
     response = await tryFollowRedirects(url);
